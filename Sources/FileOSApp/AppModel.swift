@@ -46,19 +46,25 @@ final class AppModel {
     private(set) var showPreview: Bool
     var filterShown = false
     private(set) var clipboard: Clipboard?
-    /// The last transfer started; the next one waits for it (one at a time until Task 6's queue).
-    @ObservationIgnored var transferTail: Task<Void, Never>?
+    /// Copies and moves, one at a time, with progress and the clash sheet (F5.4, F5.5).
+    let transfers: TransferQueue
+    /// ⌘K (F7).
+    let search: SearchModel
+    var showSearch = false
+    var showSaveLayout = false
 
     // Dialogs (see FileDialogs)
-    var clashPrompt: ClashPrompt?
     var extensionPrompt: ExtensionPrompt?
     var showExtensionAlert = false
     var showEmptyTrashAlert = false
     private(set) var emptyTrashSummary: (count: Int, bytes: Int64) = (0, 0)
     var showBatchRename = false
     private(set) var batchRenameTargets: [URL] = []
+    /// The layout's panes (1–4, F8.3); menus and keys act on `pane`, the active one.
     var panes: [PaneModel]
     var activePane = 0
+    private(set) var layout: PaneLayout = .one
+    private(set) var savedLayouts: [SavedLayout]
     private(set) var showHidden: Bool
     var page: Page = .browser
     private(set) var toasts: [Toast] = []
@@ -81,6 +87,8 @@ final class AppModel {
     init(home: URL, trashDir: URL? = nil) {
         self.home = FileOps.canonical(home)
         self.trashDir = trashDir
+        transfers = TransferQueue(trashDir: trashDir)
+        search = SearchModel()
         let store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
         self.store = store
         let hidden = store.get("showHidden", default: false)
@@ -90,6 +98,7 @@ final class AppModel {
         shortcuts = Shortcuts.merged(store.get("shortcuts", default: [String: KeyCombo]()))
         iconSize = store.get("view.size", default: IconSize.medium)
         showPreview = store.get("view.preview", default: false)
+        savedLayouts = store.get("layouts", default: [SavedLayout]())
         let pane = PaneModel(url: home, showHidden: hidden, store: store)
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
@@ -399,10 +408,12 @@ extension AppModel {
         }
     }
 
-    /// F5.3: same disk moves, another disk copies, ⌥ always copies.
+    /// F5.3: same disk moves, another disk copies, ⌥ always copies. F8.2: from a pane always moves.
     func drop(_ urls: [URL], into folder: URL) async {
         guard let first = urls.first else { return }
-        let copy: Bool = NSEvent.modifierFlags.contains(.option) || !Self.sameVolume(first, folder)
+        let shown: Set<URL> = Set(panes.flatMap { (p: PaneModel) -> [URL] in p.columnDirs })
+        let fromPane: Bool = urls.allSatisfy { (u: URL) -> Bool in shown.contains(FileOps.canonical(u.deletingLastPathComponent())) }
+        let copy: Bool = NSEvent.modifierFlags.contains(.option) || (!fromPane && !Self.sameVolume(first, folder))
         _ = await runTransfer(urls, to: folder, mode: copy ? .copy : .move)
     }
 
@@ -413,57 +424,34 @@ extension AppModel {
         return x.isEqual(y)
     }
 
-    /// Runs one transfer after any earlier one finishes, asking about clashes; true when every item was handled.
+    /// Queues one transfer behind any earlier one, asking about clashes; true when every item was handled.
     @discardableResult
     func runTransfer(_ sources: [URL], to dest: URL, mode: TransferMode) async -> Bool {
-        // shortcut: no progress UI yet (Task 6's TransferQueue); transfers just run one after another
-        let previous: Task<Void, Never>? = transferTail
-        let job = Task { () async -> Bool in
-            await previous?.value
-            return await self.performTransfer(sources, to: dest, mode: mode)
-        }
-        transferTail = Task { _ = await job.value }
-        return await job.value
-    }
-
-    private func performTransfer(_ sources: [URL], to dest: URL, mode: TransferMode) async -> Bool {
-        do {
-            let result: TransferResult = try await transfer(sources, to: dest, mode: mode, trashDir: trashDir,
-                                                            resolve: { (clash: Clash) async -> (ClashChoice, applyToAll: Bool) in
-                await self.askClash(clash)
-            })
-            reloadAll()
+        guard let outcome = await transfers.run(sources, to: dest, mode: mode) else { return false } // cancelled while waiting
+        reloadAll()
+        switch outcome {
+        case .failure(let error):
+            fail(error)
+            return false
+        case .success(let result):
             let done: Int = result.results.count
             if done > 0 {
                 undo.push(mode == .move ? "Move" : "Copy", result.undo)
                 let verb: String = mode == .move ? "Moved" : "Copied"
                 toast("\(verb) \(Self.items(done)) to “\(dest.lastPathComponent)”", undoable: true)
-                if FileOps.canonical(dest) == pane.currentFolder || FileOps.canonical(dest) == pane.url {
-                    select(result.results.map { (r: (from: URL, to: URL, action: TransferResult.Action)) -> URL in r.to })
+                let made: Set<String> = Set(result.results.map { (r: (from: URL, to: URL, action: TransferResult.Action)) -> String in r.to.path })
+                for p in panes where FileOps.canonical(dest) == p.currentFolder || FileOps.canonical(dest) == p.url {
+                    p.selection = made
                 }
             }
             if let failure = result.failure { fail(failure) }
             return result.failure == nil && !result.stopped
-        } catch {
-            fail(error)
-            return false
         }
     }
 
-    func askClash(_ clash: Clash) async -> (ClashChoice, applyToAll: Bool) {
-        let answer: (ClashChoice, Bool) = await withCheckedContinuation { (c: CheckedContinuation<(ClashChoice, Bool), Never>) in
-            // Transfers are serialised, but never strand an earlier question's transfer: stop it.
-            if let earlier = clashPrompt { earlier.continuation.resume(returning: (.stop, false)) }
-            clashPrompt = ClashPrompt(clash: clash, continuation: c)
-        }
-        return (answer.0, applyToAll: answer.1)
-    }
+    var clashPrompt: ClashPrompt? { transfers.clashPrompt }
 
-    func answerClash(_ choice: ClashChoice, all: Bool) {
-        guard let prompt = clashPrompt else { return }
-        clashPrompt = nil
-        prompt.continuation.resume(returning: (choice, all))
-    }
+    func answerClash(_ choice: ClashChoice, all: Bool) { transfers.answerClash(choice, all: all) }
 
     // MARK: Rename (F5.6, F5.7)
 

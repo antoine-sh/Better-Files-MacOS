@@ -12,7 +12,8 @@ struct MainWindow: View {
             detail
         }
         .overlay(alignment: .bottom) { ToastsView() }
-        .modifier(FileDialogs(model: model))
+        .overlay(alignment: .bottomTrailing) { TransferQueueView(queue: model.transfers) }
+        .modifier(FileDialogs(model: model, queue: model.transfers))
     }
 
     private var sidebar: some View {
@@ -28,26 +29,17 @@ struct MainWindow: View {
     }
 }
 
+/// The browser: the layout's panes under one toolbar that acts on the active pane.
 struct BrowserView: View {
     @Bindable var pane: PaneModel
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        column
+        PaneLayoutView()
             .navigationTitle(model.displayName(pane.url))
             .toolbar { navigationButtons }
             .toolbar { ViewToolbar(pane: pane, model: model) }
             .modifier(FilterField(pane: pane, model: model))
-    }
-
-    private var column: some View {
-        VStack(spacing: 0) {
-            PathBarView(pane: pane)
-            Divider()
-            content.frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            StatusBar(pane: pane)
-        }
     }
 
     private var navigationButtons: some ToolbarContent {
@@ -59,37 +51,6 @@ struct BrowserView: View {
 
     private func back() { pane.back() }
     private func forward() { pane.forward() }
-
-    @ViewBuilder private var content: some View {
-        switch FolderState(error: pane.error) {
-        case .contents:
-            HStack(spacing: 0) {
-                files.frame(maxWidth: .infinity, maxHeight: .infinity)
-                previewPane
-            }
-        case .locked(let folder):
-            LockedFolderView(folder: folder, pane: pane)
-        case .unavailable(let message):
-            FolderErrorView(message: message, pane: pane)
-        }
-    }
-}
-
-extension BrowserView {
-    @ViewBuilder fileprivate var files: some View {
-        switch pane.view {
-        case .list: FileListView(pane: pane)
-        case .icons: IconGridView(pane: pane)
-        case .columns: ColumnBrowserView(pane: pane)
-        }
-    }
-
-    @ViewBuilder fileprivate var previewPane: some View {
-        if model.showPreview, pane.view != .columns {
-            Divider()
-            PreviewPane(pane: pane).frame(width: 260)
-        }
-    }
 }
 
 /// ⌘F (F3.7) focuses the filter field.
@@ -110,6 +71,9 @@ private struct ViewToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
+            IconButton(symbol: "magnifyingglass", label: "Search", help: "Search everything (⌘K)", disabled: false,
+                       action: { model.openSearch() })
+            DualPaneMenu(model: model)
             ViewModePicker(pane: pane, model: model)
             SortMenu(pane: pane, model: model)
             GroupMenu(pane: pane, model: model)
@@ -208,11 +172,23 @@ private struct EmptyTrashButton: View {
 /// Window-level sheets and alerts for file operations.
 struct FileDialogs: ViewModifier {
     @Bindable var model: AppModel
+    @Bindable var queue: TransferQueue
+    @State private var layoutName = ""
 
     func body(content: Content) -> some View {
         content
-            .sheet(item: $model.clashPrompt) { (prompt: ClashPrompt) in
+            .sheet(item: $queue.clashPrompt) { (prompt: ClashPrompt) in
                 ClashDialog(prompt: prompt).environment(model)
+            }
+            .sheet(isPresented: $model.showSearch) {
+                SearchPalette(search: model.search).environment(model)
+            }
+            .alert("Save Layout", isPresented: $model.showSaveLayout) {
+                TextField("Name", text: $layoutName)
+                Button("Save", action: { saveLayout() })
+                Button("Cancel", role: .cancel, action: {})
+            } message: {
+                Text("Saved layouts are listed first in the Dual Pane menu and in ⌘K.")
             }
             .sheet(isPresented: $model.showBatchRename) {
                 BatchRenameSheet(urls: model.batchRenameTargets).environment(model)
@@ -227,6 +203,11 @@ struct FileDialogs: ViewModifier {
                 Button(keepTitle, action: { model.resolveExtension(keep: true) })
                 Button(useTitle, action: { model.resolveExtension(keep: false) })
             }
+    }
+
+    private func saveLayout() {
+        model.saveLayout(named: layoutName)
+        layoutName = ""
     }
 
     private var extensionTitle: String { model.extensionPrompt.map { (p: ExtensionPrompt) -> String in AppModel.extensionTitle(p) } ?? "" }

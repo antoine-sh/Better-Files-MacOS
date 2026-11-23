@@ -17,17 +17,21 @@ struct PathBarView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .onChange(of: model.editingPath, initial: true) { (_: Bool, editing: Bool) in
+        .onChange(of: isEditing, initial: true) { (_: Bool, editing: Bool) in
             if editing { beginEditing() }
         }
     }
 
+    /// ⌘L and errors belong to the active pane only.
+    private var isActive: Bool { model.pane === pane }
+    private var isEditing: Bool { model.editingPath && isActive }
+
     @ViewBuilder private var bar: some View {
-        if model.editingPath { editor } else { crumbs }
+        if isEditing { editor } else { crumbs }
     }
 
     @ViewBuilder private var errorArea: some View {
-        if let missing = model.pathError {
+        if isActive, let missing = model.pathError {
             PathErrorLine(name: missing.name, parent: missing.parent, suggestion: missing.suggestion)
         }
     }
@@ -38,7 +42,10 @@ struct PathBarView: View {
         choice = 0
     }
 
-    private func startEditing() { model.editingPath = true }
+    private func startEditing() {
+        model.activate(pane)
+        model.editingPath = true
+    }
 
     private var crumbURLs: [URL] {
         var urls: [URL] = []
@@ -66,6 +73,7 @@ struct PathBarView: View {
         return HStack(spacing: 2) {
             ForEach(urls, id: \.self) { (url: URL) in
                 Crumb(title: model.displayName(url), isFirst: url == urls.first, isCurrent: url == pane.url) {
+                    model.activate(pane)
                     model.open(url)
                 }
             }

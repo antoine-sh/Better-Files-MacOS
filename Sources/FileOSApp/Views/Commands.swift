@@ -180,6 +180,8 @@ private struct ViewMenuCommands: Commands {
             Divider()
             showCommands
             Divider()
+            PaneCommands(model: model)
+            Divider()
         }
     }
 
@@ -234,6 +236,7 @@ private struct GoMenuCommands: Commands {
             Divider()
             placeCommands
             Divider()
+            MenuItem(title: "Search…", id: "search", model: model, action: { model.openSearch() })
             MenuItem(title: "Go to Folder…", id: "goToFolder", model: model, action: { editPath() })
             MenuItem(title: "Type a Path", id: "typePath", model: model, action: { editPath() })
         }
@@ -273,5 +276,36 @@ private struct GoMenuCommands: Commands {
     private func editPath() {
         model.page = .browser
         model.editingPath = true
+    }
+}
+
+/// F8: two panes, layouts and the commander transfer keys.
+private struct PaneCommands: View {
+    let model: AppModel
+    private var several: Bool { model.panes.count > 1 }
+
+    var body: some View {
+        MenuItem(title: several ? "Single Pane" : "Dual Pane", id: "dualPane", model: model, action: { model.toggleDualPane() })
+        MenuItem(title: "Switch Pane", id: "switchPane", model: model, disabled: !several, action: { model.switchPane() })
+        MenuItem(title: "Swap Panes", id: "swapPanes", model: model, disabled: !several, action: { model.swapPanes() })
+        Menu("Layout") {
+            ForEach(model.savedLayouts) { (saved: SavedLayout) in
+                Button(saved.name, action: { model.applyLayout(saved) })
+            }
+            if !model.savedLayouts.isEmpty { Divider() }
+            ForEach(PaneLayout.allCases, id: \.self) { (layout: PaneLayout) in
+                MenuItem(title: layout.title, id: layout.shortcutID, model: model, action: { model.setLayout(layout) })
+            }
+            Divider()
+            Button("Save Layout…", action: { model.showSaveLayout = true })
+        }
+        MenuItem(title: "Copy to Other Pane", id: "copyToOtherPane", model: model, disabled: !several, action: { send(.copy) })
+        MenuItem(title: "Move to Other Pane", id: "moveToOtherPane", model: model, disabled: !several, action: { send(.move) })
+    }
+
+    /// F5 / F6 do nothing while typing in a field.
+    private func send(_ mode: TransferMode) {
+        if TextEditing.isActive { return }
+        Task { await model.transferToOtherPane(mode) }
     }
 }

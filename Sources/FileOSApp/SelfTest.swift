@@ -137,6 +137,9 @@ enum SelfTest {
 
         for (name, passed) in await fileChecks(model) { check(name, passed) }
         for (name, passed) in viewChecks(model) { check(name, passed) }
+        for (name, passed) in await paneChecks(model) { check(name, passed) }
+        for (name, passed) in await queueChecks(model) { check(name, passed) }
+        for (name, passed) in await searchChecks(model) { check(name, passed) }
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -318,6 +321,125 @@ enum SelfTest {
         r.append(("⇧⌘N is New Folder", newFolder == KeyboardShortcut("n", modifiers: [.command, .shift])))
         r.append(("F7 is a menu shortcut", model.shortcuts["newFolderF7"]?.menuShortcut != nil))
         r.append(("Return is left to the file views", model.shortcuts["rename"]?.menuShortcut == nil))
+        return r
+    }
+
+    /// F8: ⌘D, Tab, F5, ⌘U, layouts and saved layouts.
+    static func paneChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let home: URL = model.home
+        let docs: URL = home.appendingPathComponent("Documents")
+        let aTxt: URL = docs.appendingPathComponent("a.txt")
+        let other: URL = home.appendingPathComponent("Other")
+        try? FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        model.page = .browser
+        model.setLayout(.one)
+        model.pane.navigate(to: docs)
+        model.toggleDualPane()
+        r.append(("⌘D makes two panes", model.panes.count == 2 && model.layout == .sideBySide))
+        r.append(("two panes build two tables", tableCount(model) == 2))
+        let left: PaneModel = model.panes[0]
+        let right: PaneModel = model.panes[1]
+        model.switchPane()
+        r.append(("Tab switches the active pane", model.pane === right))
+        right.navigate(to: other)
+        model.activate(left)
+        left.selection = [aTxt.path]
+        await model.transferToOtherPane(.copy)
+        let copied: URL = other.appendingPathComponent("a.txt")
+        r.append(("F5 copies a file to the other pane", exists(copied) && exists(aTxt)))
+        r.append(("F5 toast", hasToast(model, "Copied 1 item to “Other”")))
+        await model.undoLast()
+        r.append(("F5 copy is undoable", !exists(copied)))
+        model.swapPanes()
+        r.append(("⌘U swaps the panes", model.panes[0] === right && model.pane === left))
+        model.setLayout(.four)
+        r.append(("⌥⌘6 makes four panes", model.panes.count == 4 && tableCount(model) == 4))
+        model.saveLayout(named: "Month end")
+        r.append(("saved layout listed first", model.savedLayouts.first?.name == "Month end"))
+        let reopened = AppModel(home: model.home, trashDir: model.trashDir)
+        r.append(("saved layout persisted", reopened.savedLayouts.first?.layout == .four))
+        let found: [NamedMatch] = SearchModel.namedMatches("month", chip: .all, store: model.store, layouts: model.savedLayouts)
+        r.append(("⌘K matches saved layouts", found.map { (n: NamedMatch) -> String in n.name } == ["Month end"]))
+        model.setLayout(.one)
+        r.append(("One Pane keeps the active pane", model.panes.count == 1 && model.pane === left))
+        model.applyLayout(model.savedLayouts[0])
+        r.append(("a saved layout restores its panes", model.panes.count == 4 && model.panes[0].url == FileOps.canonical(other)))
+        model.setLayout(.one)
+        return r
+    }
+
+    /// F5.4, F5.5: one transfer at a time, "Waiting: …", Cancel answers an open clash with Stop.
+    static func queueChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let home: URL = model.home
+        let docs: URL = home.appendingPathComponent("Documents")
+        let spare: URL = home.appendingPathComponent("Spare2")
+        try? FileManager.default.createDirectory(at: spare, withIntermediateDirectories: true)
+        let clashing: URL = home.appendingPathComponent("Other/a.txt")
+        try? "other".write(to: clashing, atomically: true, encoding: .utf8)
+        let queue: TransferQueue = model.transfers
+        let first = Task { await model.runTransfer([clashing], to: docs, mode: .copy) }
+        var asked = false
+        for _ in 0..<100 where !asked {
+            try? await Task.sleep(for: .milliseconds(20))
+            asked = model.clashPrompt != nil
+        }
+        let second = Task { await model.runTransfer([docs.appendingPathComponent("a.txt")], to: spare, mode: .copy) }
+        var queued = false
+        for _ in 0..<100 where !queued {
+            try? await Task.sleep(for: .milliseconds(20))
+            queued = !queue.waiting.isEmpty
+        }
+        let waitingText: String = queue.waiting.first.map { (j: TransferQueue.Job) -> String in TransferQueue.waitingText(j) } ?? ""
+        r.append(("a second transfer waits", asked && queued && waitingText == "Waiting: Copying “a.txt” to “Spare2”"))
+        let runningTitle: String = queue.running.map { (j: TransferQueue.Job) -> String in TransferQueue.title(j) } ?? ""
+        r.append(("the running transfer is named", runningTitle == "Copying “a.txt”"))
+        if let waiting = queue.waiting.first { queue.cancel(waiting.id) }
+        r.append(("Cancel removes a waiting transfer", queue.waiting.isEmpty))
+        if let running = queue.running { queue.cancel(running.id) }
+        let firstDone: Bool = await first.value
+        let secondDone: Bool = await second.value
+        r.append(("Cancel stops the running transfer at its clash", !firstDone && model.clashPrompt == nil
+                    && !exists(docs.appendingPathComponent("a 2.txt"))))
+        r.append(("a cancelled waiting transfer never runs", !secondDone && !exists(spare.appendingPathComponent("a.txt"))))
+        r.append(("queue is idle afterwards", queue.running == nil && queue.waiting.isEmpty))
+        let detail: String = TransferQueue.detail(bytesDone: 1_200_000_000, bytesTotal: 3_400_000_000, itemsDone: 12, itemsTotal: 40)
+        r.append(("progress text", detail == "1.2 GB of 3.4 GB · 12 of 40 items"))
+        return r
+    }
+
+    /// F7: ⌘K names, contents with the line, and ⌥Return.
+    static func searchChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let docs: URL = model.home.appendingPathComponent("Documents")
+        let aTxt: URL = docs.appendingPathComponent("a.txt")
+        try? "one\nthe needle line".write(to: docs.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+        let search: SearchModel = model.search
+        model.openSearch()
+        r.append(("⌘K opens the palette", model.showSearch))
+        search.query = "zzzz"
+        model.runSearch()
+        search.query = "a.txt"
+        model.runSearch()
+        await search.pending?.value
+        let names: [String] = search.hits.map { (h: SearchHit) -> String in h.url.path }
+        r.append(("⌘K finds Documents/a.txt", names.contains(aTxt.path)))
+        search.query = "needle"
+        search.contents = true
+        model.runSearch()
+        await search.pending?.value
+        let line: (number: Int, text: String)? = search.hits.first?.line
+        r.append(("Contents shows the matching line", line?.number == 2 && line?.text == "the needle line"))
+        search.contents = false
+        search.query = "a.txt"
+        model.runSearch()
+        await search.pending?.value
+        if let row = search.rows.first(where: { (row: PaletteRow) -> Bool in row.id == "\(aTxt.path)#0" }) {
+            model.revealPaletteRow(row)
+        }
+        r.append(("⌥Return shows the file in its folder", !model.showSearch && model.pane.url == FileOps.canonical(docs)
+                    && model.pane.selection == Set([aTxt.path])))
         return r
     }
 

@@ -8,6 +8,8 @@ import FileOSCore
 struct FileContextMenu: View {
     let ids: Set<String>
     @Environment(AppModel.self) private var model
+    /// The pane this menu belongs to; it becomes active before any action runs.
+    @Environment(PaneModel.self) private var owner: PaneModel?
 
     private var urls: [URL] { ids.sorted().map { (p: String) -> URL in URL(fileURLWithPath: p) } }
 
@@ -17,48 +19,65 @@ struct FileContextMenu: View {
 
     @ViewBuilder private var items: some View {
         Group {
-            Button("Open", action: { model.openSelection(ids) })
+            Button("Open", action: { act { model.openSelection(ids) } })
             OpenWithMenu(urls: urls)
             Divider()
-            Button(urls.count == 1 ? "Rename…" : "Rename \(urls.count) Items…", action: { model.beginRename(urls) })
-            Button("Duplicate", action: { model.duplicate(urls) })
-            Button("Make Alias", action: { model.makeAlias(urls) })
+            Button(urls.count == 1 ? "Rename…" : "Rename \(urls.count) Items…", action: { act { model.beginRename(urls) } })
+            Button("Duplicate", action: { act { model.duplicate(urls) } })
+            Button("Make Alias", action: { act { model.makeAlias(urls) } })
             Divider()
         }
         Group {
-            Button("Copy", action: { model.copy(urls) })
-            Button("Cut", action: { model.copy(urls, cut: true) })
+            Button("Copy", action: { act { model.copy(urls) } })
+            Button("Cut", action: { act { model.copy(urls, cut: true) } })
             pasteInto
-            Button("Copy Path", action: { model.copyPath(urls) })
+            copyToOther
+            Button("Copy Path", action: { act { model.copyPath(urls) } })
             Divider()
         }
         Group {
-            Button("Show in Finder", action: { model.showInFinder(urls) })
-            Button("Add to Sidebar", action: { model.addToSidebar(urls) })
-            Button("AirDrop…", action: { model.airDrop(urls) })
+            Button("Show in Finder", action: { act { model.showInFinder(urls) } })
+            Button("Add to Sidebar", action: { act { model.addToSidebar(urls) } })
+            Button("AirDrop…", action: { act { model.airDrop(urls) } })
                 .disabled(!model.canAirDrop(urls))
             Divider()
-            Button("Move to Trash", action: { model.trash(urls) })
+            Button("Move to Trash", action: { act { model.trash(urls) } })
         }
+    }
+
+    /// F8.2: "Copy to “Invoices 2026”" with several panes.
+    @ViewBuilder private var copyToOther: some View {
+        if let owner, let other = model.otherPane(of: owner) {
+            Button("Copy to “\(model.displayName(other.currentFolder))”", action: { act { send(urls) } })
+        }
+    }
+
+    private func send(_ urls: [URL]) {
+        Task { await model.transferToOtherPane(.copy, urls) }
+    }
+
+    private func act(_ action: () -> Void) {
+        if let owner { model.activate(owner) }
+        action()
     }
 
     /// "Paste into “folder”" when one folder is chosen (F5.1).
     @ViewBuilder private var pasteInto: some View {
         if urls.count == 1, let folder = urls.first, AppModel.isBrowsableFolder(folder) {
-            Button("Paste into “\(folder.lastPathComponent)”", action: { paste(into: folder) })
+            Button("Paste into “\(folder.lastPathComponent)”", action: { act { paste(into: folder) } })
         }
     }
 
     @ViewBuilder private var background: some View {
-        Button("New Folder", action: { model.newFolder() })
-        Button("Paste", action: { paste(into: nil) })
+        Button("New Folder", action: { act { model.newFolder() } })
+        Button("Paste", action: { act { paste(into: nil) } })
         Divider()
-        Button("Copy Path", action: { model.copyPath([]) })
-        Button("Show in Finder", action: { model.showInFinder([]) })
-        Button("Add to Sidebar", action: { model.addToSidebar([]) })
-        if model.pane.url == model.trashURL {
+        Button("Copy Path", action: { act { model.copyPath([]) } })
+        Button("Show in Finder", action: { act { model.showInFinder([]) } })
+        Button("Add to Sidebar", action: { act { model.addToSidebar([]) } })
+        if (owner ?? model.pane).url == model.trashURL {
             Divider()
-            Button("Empty Trash…", action: { model.askEmptyTrash() })
+            Button("Empty Trash…", action: { act { model.askEmptyTrash() } })
         }
     }
 
