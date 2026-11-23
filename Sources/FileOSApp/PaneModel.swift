@@ -61,13 +61,16 @@ final class PaneModel {
     var showHidden: Bool
 
     @ObservationIgnored private let store: Store?
+    /// The Downloads folder groups by kind and date the Smart Downloads way (F9.1, F9.2).
+    @ObservationIgnored private let downloads: URL?
     private let watcher = DirectoryWatcher()
     @ObservationIgnored private var reloadPending = false
 
-    init(url: URL, showHidden: Bool = false, store: Store? = nil) {
+    init(url: URL, showHidden: Bool = false, store: Store? = nil, downloads: URL? = nil) {
         self.url = FileOps.canonical(url)
         self.showHidden = showHidden
         self.store = store
+        self.downloads = downloads.map { (u: URL) -> URL in FileOps.canonical(u) }
         loadPrefs()
         reload()
     }
@@ -94,9 +97,27 @@ final class PaneModel {
     }
 
     var sections: [RowSection] {
-        Arrange.groups(visibleEntries, by: prefs.group, now: Date()).map { (group: (title: String, entries: [Entry])) -> RowSection in
+        let list: [Entry] = visibleEntries
+        if url == downloads, prefs.group != .none { return downloadSections(list) }
+        return Arrange.groups(list, by: prefs.group, now: Date()).map { (group: (title: String, entries: [Entry])) -> RowSection in
             RowSection(title: group.title, rows: flatten(group.entries, depth: 0))
         }
+    }
+
+    private func downloadSections(_ list: [Entry]) -> [RowSection] {
+        var out: [RowSection] = []
+        if prefs.group == .date {
+            for group in Tidy.groupByDate(list, now: Date(), calendar: .current) {
+                out.append(RowSection(title: group.label, rows: flatten(group.items, depth: 0)))
+            }
+            return out
+        }
+        let folders: [Entry] = list.filter { (e: Entry) -> Bool in e.isDirectory }
+        if !folders.isEmpty { out.append(RowSection(title: "Folders", rows: flatten(folders, depth: 0))) }
+        for group in Tidy.groupByKind(list) {
+            out.append(RowSection(title: group.kind?.rawValue ?? "Downloading", rows: flatten(group.items, depth: 0)))
+        }
+        return out
     }
 
     var rows: [Row] { sections.flatMap { (s: RowSection) -> [Row] in s.rows } }

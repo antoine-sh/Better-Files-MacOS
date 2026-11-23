@@ -16,6 +16,7 @@ struct MainWindow: View {
         .overlay { SearchOverlay() }
         .overlay { PeekOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
+        .modifier(SmartDialogs(model: model))
         .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
     }
 
@@ -28,6 +29,8 @@ struct MainWindow: View {
             BrowserView(pane: model.pane)
         } else if model.page == .markdown, let doc = model.markdown {
             MarkdownPage(doc: doc)
+        } else if model.page == .freeUpSpace {
+            FreeUpSpaceView(clean: model.clean)
         } else {
             PlaceholderPage(title: model.page.title)
         }
@@ -84,6 +87,8 @@ private struct ViewToolbar: ToolbarContent {
             GroupMenu(pane: pane, model: model)
             IconButton(symbol: "sidebar.right", label: "Preview", help: "Show Preview (⇧⌘P)", disabled: false,
                        action: { model.togglePreview() })
+            IconButton(symbol: "chart.pie", label: "Insights", help: "Insights (⌥⌘I)", disabled: false,
+                       action: { model.toggleInsights() })
             EmptyTrashButton(pane: pane, model: model)
         }
     }
@@ -221,6 +226,21 @@ struct FileDialogs: ViewModifier {
     private var extensionTitle: String { model.extensionPrompt.map { (p: ExtensionPrompt) -> String in AppModel.extensionTitle(p) } ?? "" }
     private var keepTitle: String { "Keep \(model.extensionPrompt?.from ?? "")" }
     private var useTitle: String { "Use \(model.extensionPrompt?.to ?? "")" }
+}
+
+/// Tidy (F9.4) and Choose Symbol… (F13.2).
+struct SmartDialogs: ViewModifier {
+    @Bindable var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $model.showTidy, onDismiss: { model.tidy = nil }) {
+                TidySheet().environment(model)
+            }
+            .sheet(isPresented: $model.showSymbolChooser) {
+                SymbolChooser(urls: model.symbolTargets).environment(model)
+            }
+    }
 }
 
 /// The clash question, if one is still open when the sheet builds.

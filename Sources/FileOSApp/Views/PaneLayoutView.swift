@@ -220,9 +220,12 @@ struct PaneView: View {
         }
     }
 
-    /// Hidden with several panes (F8.3).
+    /// Hidden with several panes (F8.3). Insights (F3.12) takes the same place.
     @ViewBuilder private var previewPane: some View {
-        if model.showPreview, !several, pane.view != .columns {
+        if model.showInsights, !several {
+            Divider()
+            InsightsPanel(pane: pane).frame(width: 260)
+        } else if model.showPreview, !several, pane.view != .columns {
             Divider()
             PreviewPane(pane: pane).frame(width: 260)
         }

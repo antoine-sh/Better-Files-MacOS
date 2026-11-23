@@ -84,7 +84,7 @@ public enum Shortcuts {
             "newFolderF7": "F7", "copy": "Cmd+C", "cut": "Cmd+X", "paste": "Cmd+V", "moveHere": "Alt+Cmd+V",
             "selectAll": "Cmd+A", "copyPath": "Alt+Cmd+C", "makeAlias": "Ctrl+Cmd+A", "airDrop": "Shift+Cmd+R",
             "showInFinder": "Cmd+R", "addToSidebar": "Ctrl+Cmd+T", "openInTerminal": "Alt+Shift+Cmd+T",
-            "openInEditor": "Alt+Shift+Cmd+E", "editF4": "F4", "newTerminalTab": "Alt+Cmd+T",
+            "openInEditor": "Alt+Shift+Cmd+E", "editF4": "F4", "tidy": "Alt+Cmd+T",
             "trash": "Cmd+Delete", "trashF8": "F8", "undo": "Cmd+Z", "redo": "Shift+Cmd+Z", "quickActions": "Cmd+.",
             // Two panes
             "dualPane": "Cmd+D", "switchPane": "Tab", "copyToOtherPane": "F5", "moveToOtherPane": "F6",

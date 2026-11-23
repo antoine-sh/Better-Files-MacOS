@@ -108,7 +108,7 @@ private struct NameCell: View {
     var body: some View {
         HStack(spacing: 4) {
             disclosure
-            FileIcon(url: row.entry.url, side: model.iconSize.listIcon)
+            icon
             name
         }
         .padding(.leading, CGFloat(row.depth) * 16)
@@ -117,6 +117,16 @@ private struct NameCell: View {
     }
 
     private var dimmed: Bool { row.entry.isHidden || model.isCut(row.id) }
+
+    /// Plain folders show their symbol (F13.1); packages such as .app keep the system icon.
+    @ViewBuilder private var icon: some View {
+        let side: CGFloat = model.iconSize.listIcon
+        if row.entry.isDirectory, (row.entry.name as NSString).pathExtension.isEmpty {
+            FolderGlyph(entry: row.entry, size: side * 0.85).frame(width: side, height: side)
+        } else {
+            FileIcon(url: row.entry.url, side: side)
+        }
+    }
 
     @ViewBuilder private var disclosure: some View {
         if row.entry.isDirectory {

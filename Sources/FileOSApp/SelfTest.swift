@@ -145,6 +145,7 @@ enum SelfTest {
         // These print as they go, so a crash points at the step that caused it.
         await peekChecks(model, check)
         await markdownChecks(model, check)
+        await smartChecks(model, check)
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -604,6 +605,90 @@ enum SelfTest {
         model.showLeaveAlert = false
         model.finishLeaving(save: false)
         check("Don't Save leaves without writing", model.page == .browser && model.markdown == nil && onDisk() == original2)
+    }
+
+    /// F9 Tidy and Smart Downloads, F13 folder symbols, F10 Free Up Space.
+    static func smartChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        let downloads: URL = home.appendingPathComponent("Downloads")
+        let hourAgo: Date = Date().addingTimeInterval(-3600)
+        try? fm.createDirectory(at: downloads, withIntermediateDirectories: true)
+        for name in ["a.pdf", "b.jpg", "c.pdf"] {
+            let url: URL = downloads.appendingPathComponent(name)
+            try? name.write(to: url, atomically: true, encoding: .utf8)
+            try? fm.setAttributes([.modificationDate: hourAgo, .creationDate: hourAgo], ofItemAtPath: url.path)
+        }
+        try? "new".write(to: downloads.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        model.page = .browser
+        model.pane.navigate(to: downloads)
+        check("Tidy is titled for Downloads", model.tidyTitle == "Tidy Downloads…")
+        model.beginTidy()
+        check("Tidy plans the loose files", model.showTidy && model.tidy?.count == 3 && model.tidy?.buttonTitle == "Move 3 Files")
+        check("Tidy leaves just-added files", model.tidy?.plan.left.first?.reason == "Added in the last 2 minutes")
+        model.setTidySkip(.images, true)
+        check("unticking a kind skips it", model.tidy?.buttonTitle == "Move 2 Files")
+        model.applyTidy()
+        check("Tidy moves into kind folders", exists(downloads.appendingPathComponent("PDFs/a.pdf")) && exists(downloads.appendingPathComponent("b.jpg")))
+        check("Tidy toast", hasToast(model, "Moved 2 files into folders"))
+        await model.undoLast()
+        check("undoing Tidy restores and removes its folder", exists(downloads.appendingPathComponent("a.pdf"))
+                    && !exists(downloads.appendingPathComponent("PDFs")))
+
+        model.setGroup(.date)
+        let dateTitles: [String] = model.pane.sections.map { (s: RowSection) -> String in s.title }
+        check("Downloads groups by Smart Downloads dates", dateTitles.first == "Today")
+        model.setGroup(.kind)
+        let kindTitles: [String] = model.pane.sections.map { (s: RowSection) -> String in s.title }
+        check("Downloads groups by kind, biggest first", kindTitles.first == "Documents" || kindTitles.first == "PDFs")
+        model.setGroup(.none)
+        model.setView(.list)
+        if !model.showInsights { model.toggleInsights() }
+        check("Insights replaces the preview pane", model.showInsights && !model.showPreview)
+        check("Insights builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSTableView })
+        model.toggleInsights()
+
+        let invoices: URL = home.appendingPathComponent("Documents/Invoices")
+        try? fm.createDirectory(at: invoices, withIntermediateDirectories: true)
+        let entry: Entry? = (try? FileOps.listDirectory(invoices.deletingLastPathComponent()))?.first { (e: Entry) -> Bool in e.name == "Invoices" }
+        if let entry {
+            await model.loadSymbol(entry)
+            check("Invoices gets the receipt symbol", model.folderSymbol(entry) == "receipt")
+            model.setSymbol("star", for: [invoices])
+            let stored: [String: String] = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
+                .get(AppModel.symbolsKey, default: [String: String]())
+            check("a chosen symbol is stored by path", model.folderSymbol(entry) == "star" && stored[FileOps.canonical(invoices).path] == "star")
+            model.setColor("red", for: [invoices])
+            check("a chosen colour shows", model.folderColor(invoices) != nil)
+            await model.undoLast()
+            await model.undoLast()
+            check("undo puts the automatic symbol and colour back", model.folderSymbol(entry) == "receipt" && model.folderColor(invoices) == nil)
+        } else {
+            check("Invoices is listed", false)
+        }
+
+        let blob: String = String(repeating: "z", count: 4096)
+        let kept: URL = home.appendingPathComponent("Documents/big.bin")
+        let spare: URL = downloads.appendingPathComponent("big.bin")
+        try? blob.write(to: kept, atomically: true, encoding: .utf8)
+        try? blob.write(to: spare, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.modificationDate: hourAgo, .creationDate: hourAgo.addingTimeInterval(-86_400)], ofItemAtPath: kept.path)
+        try? fm.setAttributes([.modificationDate: hourAgo, .creationDate: hourAgo], ofItemAtPath: spare.path)
+        await model.clean.scan(home: home, applications: [home.appendingPathComponent("Applications")])
+        check("Free Up Space shows nine cards", model.clean.cards.count == 9 && !model.clean.looking)
+        let dupes: [CleanItem] = model.clean.card(.duplicates)?.items ?? []
+        check("the Downloads duplicate is ticked", dupes.map { (i: CleanItem) -> String in i.url.lastPathComponent } == ["big.bin"]
+                    && dupes.first?.url.path == spare.path && dupes.first?.ticked == true)
+        check("the ticked bar", model.clean.barText == "1 ticked · 4.1 KB")
+        model.moveTickedToTrash()
+        check("Move 1 to Trash moves only the spare", !exists(spare) && exists(kept))
+        check("Smart Clean toast", hasToast(model, "Moved 1 item to the Trash"))
+        check("the moved item leaves its card", model.clean.ticked.isEmpty)
+        await model.undoLast()
+        check("undoing Smart Clean restores the spare", exists(spare))
+        model.page = .freeUpSpace
+        check("Free Up Space page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        model.page = .browser
     }
 
     private static func tableCount(_ model: AppModel) -> Int {

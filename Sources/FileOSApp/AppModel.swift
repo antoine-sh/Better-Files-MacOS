@@ -69,6 +69,20 @@ final class AppModel {
     private(set) var emptyTrashSummary: (count: Int, bytes: Int64) = (0, 0)
     var showBatchRename = false
     private(set) var batchRenameTargets: [URL] = []
+    /// ⌥⌘T (F9.4).
+    var tidy: TidyState?
+    var showTidy = false
+    /// ⌥⌘I (F3.12): takes the preview pane's place.
+    private(set) var showInsights: Bool
+    /// Free Up Space (F10).
+    let clean: CleanModel
+    /// F13: chosen symbols and colours by canonical folder path, and the automatic symbols worked out so far
+    /// (keyed by path and modification date, so a changed folder is looked at again).
+    var symbolOverrides: [String: String]
+    var colorOverrides: [String: String]
+    var autoSymbols: [String: String] = [:]
+    var symbolTargets: [URL] = []
+    var showSymbolChooser = false
     /// The layout's panes (1–4, F8.3); menus and keys act on `pane`, the active one.
     var panes: [PaneModel]
     var activePane = 0
@@ -99,6 +113,7 @@ final class AppModel {
         self.trashDir = trashDir
         transfers = TransferQueue(trashDir: trashDir)
         search = SearchModel()
+        clean = CleanModel()
         let store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
         self.store = store
         peek = PeekModel(store: store)
@@ -109,8 +124,11 @@ final class AppModel {
         shortcuts = Shortcuts.merged(store.get("shortcuts", default: [String: KeyCombo]()))
         iconSize = store.get("view.size", default: IconSize.medium)
         showPreview = store.get("view.preview", default: false)
+        showInsights = store.get("view.insights", default: false)
+        symbolOverrides = store.get(Self.symbolsKey, default: [String: String]())
+        colorOverrides = store.get(Self.colorsKey, default: [String: String]())
         savedLayouts = store.get("layouts", default: [SavedLayout]())
-        let pane = PaneModel(url: home, showHidden: hidden, store: store)
+        let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: home.appendingPathComponent("Downloads"))
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
         refreshVolumes()
@@ -308,7 +326,7 @@ extension AppModel {
         }
         if panes.count > new.paneCount { panes.removeLast(panes.count - new.paneCount) }
         while panes.count < new.paneCount {
-            let added = PaneModel(url: from.url, showHidden: showHidden, store: store)
+            let added = PaneModel(url: from.url, showHidden: showHidden, store: store, downloads: home.appendingPathComponent("Downloads"))
             added.view = from.view
             panes.append(added)
         }
@@ -695,6 +713,14 @@ extension AppModel {
     func togglePreview() {
         showPreview.toggle()
         store.set("view.preview", showPreview)
+        if showPreview && showInsights { toggleInsights() }
+    }
+
+    /// ⌥⌘I: Insights and the preview pane share one place, so showing one hides the other.
+    func toggleInsights() {
+        showInsights.toggle()
+        store.set("view.insights", showInsights)
+        if showInsights && showPreview { togglePreview() }
     }
 
     func setGroup(_ grouping: Grouping) {

@@ -99,6 +99,12 @@ private struct FileMenuCommands: Commands {
         MenuItem(title: "Make Alias", id: "makeAlias", model: model, disabled: targets.isEmpty, action: { model.makeAlias(model.targets) })
         MenuItem(title: "Move to Trash", id: "trash", model: model, disabled: targets.isEmpty, action: { trash() })
         MenuItem(title: "Empty Trash…", id: "emptyTrash", model: model, action: { model.askEmptyTrash() })
+        MenuItem(title: model.tidyTitle, id: "tidy", model: model, action: { tidy() })
+    }
+
+    private func tidy() {
+        model.page = .browser
+        model.beginTidy()
     }
 
     @ViewBuilder private var placeCommands: some View {
@@ -216,6 +222,8 @@ private struct ViewMenuCommands: Commands {
     @ViewBuilder private var showCommands: some View {
         MenuItem(title: model.showPreview ? "Hide Preview" : "Show Preview", id: "previewPane", model: model,
                  action: { model.togglePreview() })
+        MenuItem(title: model.showInsights ? "Hide Insights" : "Show Insights", id: "insights", model: model,
+                 action: { model.toggleInsights() })
         MenuItem(title: model.showHidden ? "Hide Hidden Files" : "Show Hidden Files", id: "toggleHidden", model: model,
                  action: { model.toggleHidden() })
         MenuItem(title: "Filter", id: "filter", model: model, action: { filter() })
@@ -237,6 +245,7 @@ private struct GoMenuCommands: Commands {
             placeCommands
             Divider()
             MenuItem(title: "Search…", id: "search", model: model, action: { model.openSearch() })
+            MenuItem(title: "Smart Clean", id: "smartClean", model: model, action: { model.page = .freeUpSpace })
             MenuItem(title: "Go to Folder…", id: "goToFolder", model: model, action: { editPath() })
             MenuItem(title: "Type a Path", id: "typePath", model: model, action: { editPath() })
         }

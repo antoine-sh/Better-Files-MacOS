@@ -3,7 +3,7 @@ import AppKit
 import FileOSCore
 
 /// F3.10: the right-click menu for items, or (with no ids) for the folder's background.
-// shortcut: Peek, Quick Look, Choose Symbol…, Colour, Add to Workspace and Pin to Drop Shelf join
+// shortcut: Peek, Quick Look, Add to Workspace and Pin to Drop Shelf join
 // this menu with their features (Tasks 7–11)
 struct FileContextMenu: View {
     let ids: Set<String>
@@ -35,6 +35,7 @@ struct FileContextMenu: View {
             Button("Copy Path", action: { act { model.copyPath(urls) } })
             Divider()
         }
+        FolderSymbolItems(urls: urls)
         Group {
             Button("Show in Finder", action: { act { model.showInFinder(urls) } })
             Button("Add to Sidebar", action: { act { model.addToSidebar(urls) } })
@@ -83,6 +84,22 @@ struct FileContextMenu: View {
 
     private func paste(into folder: URL?) {
         Task { await model.paste(into: folder) }
+    }
+}
+
+/// Choose Symbol… / Back to Automatic Symbol when every chosen item is a folder (F13.2).
+private struct FolderSymbolItems: View {
+    let urls: [URL]
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if !urls.isEmpty, urls.allSatisfy({ (u: URL) -> Bool in AppModel.isBrowsableFolder(u) }) {
+            Button("Choose Symbol…", action: { model.chooseSymbol(urls) })
+            if urls.contains(where: { (u: URL) -> Bool in model.hasChosenSymbol(u) }) {
+                Button("Back to Automatic Symbol", action: { model.setSymbol(nil, for: urls) })
+            }
+            Divider()
+        }
     }
 }
 

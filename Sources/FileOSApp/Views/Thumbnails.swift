@@ -38,7 +38,7 @@ struct ThumbnailView: View {
 
     @ViewBuilder private var picture: some View {
         if entry.isDirectory {
-            GlassFolder(url: entry.url, side: side)
+            GlassFolder(entry: entry, side: side)
         } else {
             Image(nsImage: image ?? Thumbnails.icon(entry.url))
                 .resizable()
@@ -70,18 +70,17 @@ struct ThumbnailView: View {
 }
 
 private struct GlassFolder: View {
-    let url: URL
+    let entry: Entry
     let side: CGFloat
     @State private var count: Int?
+    private var url: URL { entry.url }
 
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: side * 0.18).fill(.ultraThinMaterial)
             RoundedRectangle(cornerRadius: side * 0.18).strokeBorder(.white.opacity(0.25))
             VStack(spacing: 2) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: side * 0.42))
-                    .foregroundStyle(.tint)
+                FolderGlyph(entry: entry, size: side * 0.42)
                 countText
             }
         }
