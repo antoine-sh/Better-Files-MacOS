@@ -40,7 +40,9 @@ public enum FileInfo {
         default:
             if let text = text(url) {
                 out.words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
-                out.lines = text.isEmpty ? 0 : text.filter { $0 == "\n" }.count + (text.hasSuffix("\n") ? 0 : 1)
+                // Bytes, not Characters: "\r\n" is one Character that never equals "\n".
+                let newlines = text.utf8.reduce(0) { $1 == 0x0A ? $0 + 1 : $0 }
+                out.lines = text.isEmpty ? 0 : newlines + (text.utf8.last == 0x0A ? 0 : 1)
             }
         }
         return out

@@ -100,8 +100,9 @@ public enum Shortcuts {
         return map.mapValues { KeyCombo($0)! }
     }()
 
-    /// System-standard shortcuts users can't rebind.
-    public static let fixed: Set<String> = ["copy", "cut", "paste", "selectAll", "undo", "redo", "settings", "quit"]
+    /// Shortcuts users can't rebind: system-standard ones, and Space for Peek (F17.5), which the
+    /// pane's key monitor handles directly.
+    public static let fixed: Set<String> = ["copy", "cut", "paste", "selectAll", "undo", "redo", "settings", "quit", "peek"]
 
     /// The other action already using `combo`, if any.
     public static func conflict(in map: [String: KeyCombo], action: String, combo: KeyCombo) -> String? {

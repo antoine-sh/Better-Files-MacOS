@@ -2,7 +2,20 @@ import SwiftUI
 import AppKit
 import FileOSCore
 
+/// Asks before quitting with unsaved Markdown edits. Closing the window keeps them: the model lives as long as
+/// the app, and a new window shows the page again.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    var model: AppModel?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        return model.mayQuit({ (name: String) -> LeaveAnswer in AppModel.askToSave(name) }) ? .terminateNow : .terminateCancel
+    }
+}
+
 struct FileOSApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel(home: AppModel.defaultHome)
 
     var body: some Scene {
@@ -10,6 +23,7 @@ struct FileOSApp: App {
             MainWindow()
                 .environment(model)
                 .frame(minWidth: 760, minHeight: 460)
+                .onAppear { delegate.model = model }
         }
         .commands { FileOSCommands(model: model) }
     }

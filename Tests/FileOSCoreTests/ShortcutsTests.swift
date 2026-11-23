@@ -67,4 +67,9 @@ final class ShortcutsTests: XCTestCase {
         XCTAssertNil(merged["nonsense"])
         XCTAssertEqual(merged.count, Shortcuts.defaults.count)
     }
+
+    func testPeekStaysOnSpace() {
+        // F17.5: Space is fixed; the pane's key monitor handles it.
+        XCTAssertEqual(Shortcuts.merged(["peek": KeyCombo("Cmd+P")!])["peek"], KeyCombo("Space"))
+    }
 }

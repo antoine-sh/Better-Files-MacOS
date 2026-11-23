@@ -5,6 +5,8 @@ import FileOSCore
 
 enum MarkdownMode: String, CaseIterable { case preview = "Preview", edit = "Edit", split = "Split" }
 
+enum LeaveAnswer { case save, discard, cancel }
+
 /// One open .md file (F6.3): the text being edited and the text last saved.
 @MainActor @Observable
 final class MarkdownDocument {
@@ -46,7 +48,12 @@ extension AppModel {
     }
 
     func openMarkdown(_ url: URL) async {
-        if let doc = markdown, doc.isEdited, doc.url != url {
+        // Already open: show it as it is; re-reading would throw away unsaved edits.
+        if markdown?.url == url {
+            page = .markdown
+            return
+        }
+        if let doc = markdown, doc.isEdited {
             page = .markdown
             toast("Save or revert “\(doc.name)” first", undoable: false)
             return
@@ -64,12 +71,15 @@ extension AppModel {
     /// Off the main actor: the file can be up to 5 MB.
     nonisolated static func loadMarkdown(_ url: URL) async -> Result<String, MarkdownError> { Markdown.load(url) }
 
-    /// Save ⌘S: writes atomically; undo puts the previous text back unless the file changed since.
+    /// Save ⌘S: writes atomically; undo puts back what the file held just before (even if another app
+    /// changed it after it was opened), unless the file changed again since the save.
     @discardableResult
     func saveMarkdown() -> Bool {
         guard let doc = markdown, doc.isEdited else { return true }
         let url: URL = doc.url
-        let previous: String = doc.saved
+        let onDisk: String? = try? Markdown.load(url).get()
+        let previous: String = onDisk ?? doc.saved
+        let changedElsewhere: Bool = onDisk != nil && onDisk != doc.saved
         let written: String = doc.text
         do {
             try written.write(to: url, atomically: true, encoding: .utf8)
@@ -91,8 +101,34 @@ extension AppModel {
             await doc.undoSave(to: previous, from: written)
             return RestoreResult(restored: [url])
         }
-        toast("Saved “\(doc.name)”", undoable: true)
+        toast(changedElsewhere ? "Saved “\(doc.name)” over changes made elsewhere" : "Saved “\(doc.name)”", undoable: true)
         return true
+    }
+
+    /// Quitting with unsaved edits (F6.3): Save / Don't Save / Cancel; false keeps the app running.
+    func mayQuit(_ ask: (String) -> LeaveAnswer) -> Bool {
+        guard let doc = markdown, doc.isEdited else { return true }
+        switch ask(doc.name) {
+        case .save: return saveMarkdown()
+        case .discard: return true
+        case .cancel:
+            page = .markdown
+            return false
+        }
+    }
+
+    /// The same question as the in-window alert, asked modally (the app is about to quit).
+    static func askToSave(_ name: String) -> LeaveAnswer {
+        let alert = NSAlert()
+        alert.messageText = leaveTitle(name)
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertSecondButtonReturn: return .discard
+        default: return .cancel
+        }
     }
 
     /// Called whenever `page` changes: leaving an edited page goes back to it and asks first.
@@ -122,7 +158,7 @@ extension AppModel {
 // MARK: - Views
 
 /// F6.3: Preview / Edit / Split, "On this page", and the "Edited" bar.
-// shortcut: no full screen, cheat sheet or clickable task boxes yet; quitting with edits doesn't ask
+// shortcut: no full screen, cheat sheet or clickable task boxes yet
 struct MarkdownPage: View {
     @Bindable var doc: MarkdownDocument
     @Environment(AppModel.self) private var model

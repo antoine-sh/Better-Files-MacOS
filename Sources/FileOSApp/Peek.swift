@@ -103,7 +103,9 @@ final class PeekModel {
         let type: UTType? = UTType(filenameExtension: url.pathExtension)
         if url.pathExtension.lowercased() == "zip" {
             do {
-                return .zip(entries: try ZipReader.entries(url), encrypted: try ZipReader.isEncrypted(url))
+                let list: [ZipEntry] = try ZipReader.listing(url)
+                return .zip(entries: list.map { (e: ZipEntry) -> String in e.name },
+                            encrypted: list.contains { (e: ZipEntry) -> Bool in e.encrypted })
             } catch {
                 return .notice(error.localizedDescription)
             }
@@ -200,6 +202,7 @@ extension AppModel {
     }
 
     /// Unpacks next to the zip into a new folder ("a 2" if "a" exists); undo sends that folder to the Trash.
+    /// Zips with absolute or ".." names or links are refused by `ZipReader.unzip` before anything is written.
     func unpack(_ zip: URL) async {
         let dir: URL = zip.deletingLastPathComponent()
         let dest: URL = dir.appendingPathComponent(FileOps.uniqueName(in: dir, for: splitExtension(zip.lastPathComponent).base))

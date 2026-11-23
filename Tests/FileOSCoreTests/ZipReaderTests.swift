@@ -3,7 +3,7 @@ import XCTest
 
 final class ZipReaderTests: XCTestCase {
     /// A stored (uncompressed) zip built by hand: local headers, central directory, end record.
-    static func makeZip(_ files: [(String, String)]) -> Data {
+    static func makeZip(_ files: [(String, String)], unixModes: [String: Int] = [:]) -> Data {
         var out = Data(), central = Data()
         func u16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF)] }
         func u32(_ v: Int) -> [UInt8] { u16(v & 0xFFFF) + u16(v >> 16) }
@@ -19,8 +19,9 @@ final class ZipReaderTests: XCTestCase {
             let n = Array(name.utf8), b = Array(body.utf8), offset = out.count, crc = crc32(b)
             out += u32(0x04034b50) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc) + u32(b.count) + u32(b.count)
                 + u16(n.count) + u16(0) + n + b
-            central += u32(0x02014b50) + u16(20) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc)
-                + u32(b.count) + u32(b.count) + u16(n.count) + u16(0) + u16(0) + u16(0) + u16(0) + u32(0) + u32(offset) + n
+            central += u32(0x02014b50) + u16(0x0314) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc)
+                + u32(b.count) + u32(b.count) + u16(n.count) + u16(0) + u16(0) + u16(0) + u16(0)
+                + u32((unixModes[name] ?? (name.hasSuffix("/") ? 0o040755 : 0o100644)) << 16) + u32(offset) + n
         }
         let cdOffset = out.count
         out += central
@@ -92,19 +93,58 @@ final class ZipReaderTests: XCTestCase {
 
     func testUnzipUsesTheSystemTool() async throws {
         let runner = FakeRunner()
-        let src = URL(fileURLWithPath: "/tmp/a.zip"), dest = URL(fileURLWithPath: "/tmp/a")
+        let dir = makeTempDir()
+        let src = dir.appendingPathComponent("a.zip"), dest = dir.appendingPathComponent("a")
+        try Self.makeZip([("x.txt", "x")]).write(to: src)
         try await ZipReader.unzip(src, to: dest, runner: runner)
         #if os(macOS)
         XCTAssertEqual(runner.calls.list.first?.0, "/usr/bin/ditto")
-        XCTAssertEqual(runner.calls.list.first?.1, ["-x", "-k", "/tmp/a.zip", "/tmp/a"])
+        XCTAssertEqual(runner.calls.list.first?.1, ["-x", "-k", src.path, dest.path])
         #else
         XCTAssertEqual(runner.calls.list.first?.0, "unzip")
-        XCTAssertEqual(runner.calls.list.first?.1, ["-q", "/tmp/a.zip", "-d", "/tmp/a"])
+        XCTAssertEqual(runner.calls.list.first?.1, ["-q", src.path, "-d", dest.path])
         #endif
+        let failing = dir.appendingPathComponent("fail.zip")
+        try Self.makeZip([("x.txt", "x")]).write(to: failing)
         do {
-            try await ZipReader.unzip(URL(fileURLWithPath: "/tmp/fail.zip"), to: dest, runner: runner)
+            try await ZipReader.unzip(failing, to: dest, runner: runner)
             XCTFail("a failing tool must throw")
         } catch {}
+    }
+
+    func testUnzipRefusesHostileEntries() async throws {
+        let dir = makeTempDir()
+        let cases: [(Data, ZipError)] = [
+            (Self.makeZip([("ok.txt", "x"), ("/etc/evil", "x")]), .unsafePath("/etc/evil")),
+            (Self.makeZip([("a/../../evil", "x")]), .unsafePath("a/../../evil")),
+            (Self.makeZip([("..", "")]), .unsafePath("..")),
+            (Self.makeZip([("link", "/etc/passwd")], unixModes: ["link": 0o120777]), .link("link")),
+        ]
+        for (i, (data, expected)) in cases.enumerated() {
+            let url = dir.appendingPathComponent("h\(i).zip")
+            try data.write(to: url)
+            let runner = FakeRunner()
+            do {
+                try await ZipReader.unzip(url, to: dir.appendingPathComponent("out\(i)"), runner: runner)
+                XCTFail("case \(i) must be refused")
+            } catch let error as ZipError {
+                XCTAssertEqual(error, expected, "case \(i)")
+            }
+            XCTAssertTrue(runner.calls.list.isEmpty, "case \(i) never reaches the tool")
+        }
+        // A plain file whose mode is a regular file, and names merely containing dots, are fine.
+        let fine = dir.appendingPathComponent("fine.zip")
+        try Self.makeZip([("a..b/c.txt", "x"), ("f", "x")], unixModes: ["f": 0o100644]).write(to: fine)
+        try await ZipReader.unzip(fine, to: dir.appendingPathComponent("fine"), runner: FakeRunner())
+        XCTAssertEqual(try ZipReader.listing(fine).map { $0.isLink }, [false, false])
+    }
+
+    func testEndRecordMustReachTheEnd() throws {
+        var data = Self.makeZip([("a.txt", "x")])
+        data.append(contentsOf: [1, 2, 3]) // bytes after an end record that claims no comment
+        let url = makeTempDir().appendingPathComponent("t.zip")
+        try data.write(to: url)
+        XCTAssertThrowsError(try ZipReader.entries(url))
     }
 
     func testUnzipForReal() async throws {

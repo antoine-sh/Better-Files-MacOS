@@ -57,8 +57,9 @@ public enum Markdown {
             if !paragraph.isEmpty { out.append(.paragraph(paragraph.joined(separator: "\n"))) }
             paragraph = []
         }
-        for rawLine in src.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine.hasSuffix("\r") ? rawLine.dropLast() : rawLine)
+        // "\r\n" is a single Character, so split on any newline rather than on "\n".
+        for rawLine in src.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = String(rawLine)
             let indent = line.prefix { $0 == " " }.count
             let body = indent <= 3 ? String(line.dropFirst(indent)) : nil
             if let open = fence {

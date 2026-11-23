@@ -22,8 +22,17 @@ final class MarkdownTests: XCTestCase {
 
     func testCanShowAsPage() {
         XCTAssertNil(Markdown.canShowAsPage(size: 5, data: Data("# hi".utf8)))
-        XCTAssertNotNil(Markdown.canShowAsPage(size: 6_000_000, data: Data("# hi".utf8)))
-        XCTAssertNotNil(Markdown.canShowAsPage(size: 2, data: Data([0xFF, 0xFE])))
+        XCTAssertEqual(Markdown.canShowAsPage(size: 6_000_000, data: Data("# hi".utf8)), "it's over 5 MB")
+        XCTAssertEqual(Markdown.canShowAsPage(size: 2, data: Data([0xFF, 0xFE])), "it isn't UTF-8 text")
+    }
+
+    func testCRLFLineEndings() {
+        let src = "# A\r\nIntro\r\n\r\n## B\r\n```\r\n# not\r\n```\r\n- [x] done\r\n"
+        XCTAssertEqual(Markdown.outline(src).map { $0.id }, ["a", "b"])
+        XCTAssertEqual(Markdown.blocks(src), [
+            .heading(level: 1, text: "A", id: "a"), .paragraph("Intro"), .heading(level: 2, text: "B", id: "b"),
+            .code("# not"), .task(done: true, text: "done"),
+        ])
     }
 
     func testLoadRefusesFoldersAndLinks() throws {

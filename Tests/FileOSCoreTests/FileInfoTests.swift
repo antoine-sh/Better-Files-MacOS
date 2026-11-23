@@ -12,6 +12,14 @@ final class FileInfoTests: XCTestCase {
         XCTAssertNil(s.pixelSize)
     }
 
+    func testCRLFTextCounts() {
+        let url = touch(makeTempDir(), "win.txt", "one two\r\nthree\r\n\r\nfour")
+        XCTAssertEqual(FileInfo.summary(url).lines, 4)
+        XCTAssertEqual(FileInfo.summary(url).words, 4)
+        let trailing = touch(makeTempDir(), "t.txt", "a\r\nb\r\n")
+        XCTAssertEqual(FileInfo.summary(trailing).lines, 2)
+    }
+
     func testPNGHeader() throws {
         var bytes: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]
         bytes += [0, 0, 0x02, 0x80, 0, 0, 0x01, 0xE0, 8, 6, 0, 0, 0]

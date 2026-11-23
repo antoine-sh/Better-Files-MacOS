@@ -579,6 +579,23 @@ enum SelfTest {
         check("Save toast", hasToast(model, "Saved “readme.md”"))
         await model.undoLast()
         check("undoing Save restores the previous text", onDisk() == original && doc.text == original)
+        doc.text = "unsaved"
+        await model.openMarkdown(readme)
+        check("reopening the open .md keeps its edits", model.markdown === doc && doc.text == "unsaved")
+        // Another app changes the file after it was opened: Save wins, Undo brings that version back.
+        try? "external".write(to: readme, atomically: true, encoding: .utf8)
+        model.saveMarkdown()
+        check("Save over an outside change says so", onDisk() == "unsaved"
+                && hasToast(model, "Saved “readme.md” over changes made elsewhere"))
+        await model.undoLast()
+        check("undo restores the outside change", onDisk() == "external" && doc.text == "external")
+        doc.text = "edited"
+        check("quitting with edits can be cancelled", !model.mayQuit({ (_: String) -> LeaveAnswer in .cancel })
+                && model.markdown === doc)
+        check("quitting with Don't Save writes nothing", model.mayQuit({ (_: String) -> LeaveAnswer in .discard })
+                && onDisk() == "external")
+        check("quitting with Save writes first", model.mayQuit({ (_: String) -> LeaveAnswer in .save }) && onDisk() == "edited")
+        let original2: String = onDisk()
         doc.text = "changed"
         model.page = .browser
         model.pageChanged(from: .markdown, to: .browser)
@@ -586,7 +603,7 @@ enum SelfTest {
                     && AppModel.leaveTitle(doc.name) == "Save the changes to “readme.md”?")
         model.showLeaveAlert = false
         model.finishLeaving(save: false)
-        check("Don't Save leaves without writing", model.page == .browser && model.markdown == nil && onDisk() == original)
+        check("Don't Save leaves without writing", model.page == .browser && model.markdown == nil && onDisk() == original2)
     }
 
     private static func tableCount(_ model: AppModel) -> Int {

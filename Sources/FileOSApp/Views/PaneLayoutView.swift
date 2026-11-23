@@ -47,7 +47,7 @@ extension AppModel {
         guard mods.isEmpty, page == .browser, !showSearch, !editingPath, !showBatchRename,
               clashPrompt == nil, pane.renaming == nil, !TextEditing.isActive,
               !(event.window?.firstResponder is NSText), event.window?.sheetParent == nil else { return false }
-        if event.keyCode == 49 {
+        if event.keyCode == 49 { // "peek" is fixed to Space (Shortcuts.fixed), so it is matched here
             guard !targets.isEmpty else { return false }
             peekSelection()
             return true
