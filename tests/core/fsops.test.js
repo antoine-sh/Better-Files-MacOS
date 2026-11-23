@@ -47,6 +47,8 @@ test('renameItem', async () => {
   const d = await tmpdir();
   const p = await touch(d, 'a.txt');
   assert.equal(await fo.renameItem(p, 'b “q” é.txt'), join(d, 'b “q” é.txt'));
+  assert.equal(await fo.renameItem(join(d, 'b “q” é.txt'), 'B.txt'), join(d, 'B.txt'));
+  await fo.renameItem(join(d, 'B.txt'), 'b “q” é.txt');
   await touch(d, 'c.txt');
   await assert.rejects(fo.renameItem(join(d, 'b “q” é.txt'), 'c.txt'), { code: 'EEXIST' });
   await assert.rejects(fo.renameItem(join(d, 'c.txt'), 'x/y'));

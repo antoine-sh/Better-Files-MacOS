@@ -6,6 +6,7 @@ test('kindOf', () => {
   assert.equal(kindOf('a.PDF'), 'PDFs');
   assert.equal(kindOf('Screenshot 2026-11-01 at 10.00.00.png'), 'Screenshots');
   assert.equal(kindOf('x.png'), 'Images');
+  assert.equal(kindOf('Screenshot x.PNG'), 'Screenshots');
   assert.equal(kindOf('x.dmg'), 'Installers');
   assert.equal(kindOf('x.tar.gz'), 'Archives');
   assert.equal(kindOf('x.mp4'), 'Videos');

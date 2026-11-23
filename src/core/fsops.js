@@ -55,10 +55,16 @@ export async function makeAlias(path) {
   return to;
 }
 
+// case-insensitive filesystems: Report.txt and report.txt are one inode, so that's a rename, not a clash
+async function sameFile(a, b) {
+  const [x, y] = await Promise.all([lstat(a), lstat(b)]);
+  return x.dev === y.dev && x.ino === y.ino;
+}
+
 export async function renameItem(path, newName) {
   if (!newName || newName === '.' || newName === '..' || /[/\\]/.test(newName)) throw Object.assign(new Error('Invalid name'), { code: 'EINVAL' });
   const to = join(dirname(path), newName);
-  if (to !== path && await exists(to)) throw Object.assign(new Error(`“${newName}” already exists`), { code: 'EEXIST' });
+  if (to !== path && await exists(to) && !(await sameFile(path, to))) throw Object.assign(new Error(`“${newName}” already exists`), { code: 'EEXIST' });
   await rename(path, to);
   return to;
 }
@@ -123,7 +129,8 @@ export async function trashSummary(trashDir) {
   try { names = await readdir(trashDir); } catch (e) { if (e.code === 'ENOENT') return { count: 0, bytes: 0 }; throw e; }
   let bytes = 0;
   for (const n of names) {
-    const p = join(trashDir, n), l = await lstat(p);
+    const p = join(trashDir, n), l = await lstat(p).catch(() => null);
+    if (!l) continue; // vanished
     bytes += l.isDirectory() ? (await dirSize(p)).bytes : l.isSymbolicLink() ? 0 : l.size;
   }
   return { count: names.length, bytes };

@@ -21,7 +21,7 @@ export function splitExt(name) {
 }
 
 export function kindOf(name) {
-  if (/^Screen ?[Ss]hot .*\.(png|jpe?g)$/.test(name)) return 'Screenshots';
+  if (/^Screen ?shot .*\.(png|jpe?g)$/i.test(name)) return 'Screenshots';
   return EXT_KIND.get(splitExt(name)[1].split('.').pop().toLowerCase()) ?? 'Other';
 }
 
