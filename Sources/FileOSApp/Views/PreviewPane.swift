@@ -54,13 +54,13 @@ struct PreviewInfo: View {
     }
 
     @ViewBuilder private func title(_ entry: Entry) -> some View {
-        if pane.renaming == entry.id {
+        if pane.hostsRename(entry.id, preview: true) {
             RenameField(url: entry.url)
         } else {
             Text(entry.name)
                 .font(.headline)
                 .textSelection(.enabled)
-                .onTapGesture(count: 2) { model.beginRename([entry.url]) }
+                .onTapGesture(count: 2) { model.beginRename([entry.url], inPreview: true) }
                 .help("Double-click to rename")
         }
     }

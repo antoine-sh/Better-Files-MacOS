@@ -73,10 +73,11 @@ private struct BrowserColumn: View {
 
     private func row(_ entry: Entry) -> some View {
         ColumnRow(entry: entry, selected: pane.selection.contains(entry.id), opened: isOpened(entry),
-                  dimmed: model.isCut(entry.id) || entry.isHidden, renaming: pane.renaming == entry.id)
+                  dimmed: model.isCut(entry.id) || entry.isHidden, renaming: pane.hostsRename(entry.id, preview: false))
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { model.openSelection([entry.id]) }
-            .onTapGesture { click(entry) }
+            // Simultaneous, so selecting doesn't wait out the double-click interval.
+            .simultaneousGesture(TapGesture().onEnded { click(entry) })
             .contextMenu { FileContextMenu(ids: pane.selection.contains(entry.id) ? pane.selection : [entry.id]) }
             .draggable(entry.url)
             .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in

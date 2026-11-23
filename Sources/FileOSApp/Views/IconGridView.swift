@@ -51,12 +51,13 @@ struct IconGridView: View {
 
     private func card(_ row: Row) -> some View {
         IconCard(entry: row.entry, size: size, selected: pane.selection.contains(row.id),
-                 dimmed: model.isCut(row.id) || row.entry.isHidden, renaming: pane.renaming == row.id,
+                 dimmed: model.isCut(row.id) || row.entry.isHidden, renaming: pane.hostsRename(row.id, preview: false),
                  menuIDs: menuIDs(row.id))
             .frame(width: cardWidth)
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { model.openSelection([row.id]) }
-            .onTapGesture { click(row.id) }
+            // Simultaneous, so selecting doesn't wait out the double-click interval.
+            .simultaneousGesture(TapGesture().onEnded { click(row.id) })
             .contextMenu { FileContextMenu(ids: menuIDs(row.id)) }
             .draggable(row.entry.url)
             .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in

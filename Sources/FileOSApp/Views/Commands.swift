@@ -108,11 +108,17 @@ private struct FileMenuCommands: Commands {
         Menu("Commander Keys") {
             MenuItem(title: "Edit", id: "editF4", model: model, action: { model.openIn(kind: .editor) })
             MenuItem(title: "New Folder", id: "newFolderF7", model: model, action: { model.newFolder() })
-            MenuItem(title: "Move to Trash", id: "trashF8", model: model, disabled: targets.isEmpty, action: { trash() })
+            MenuItem(title: "Move to Trash", id: "trashF8", model: model, disabled: targets.isEmpty, action: { trashF8() })
         }
     }
 
     private func rename() { model.beginRename() }
+
+    /// F8 while typing in a field does nothing (only ⌘⌫ has a text-editing meaning).
+    private func trashF8() {
+        if TextEditing.isActive { return }
+        model.trash(model.targets)
+    }
     private func trash() {
         // ⌘⌫ in a text field deletes to the line start; never trash files from there.
         if TextEditing.forward(#selector(NSResponder.deleteToBeginningOfLine(_:))) { return }
@@ -127,6 +133,8 @@ private struct EditMenuCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .undoRedo) {
             MenuItem(title: "Undo", id: "undo", model: model, action: { undo() })
+            // Files have no redo; text fields keep theirs.
+            MenuItem(title: "Redo", id: "redo", model: model, action: { redo() })
         }
         CommandGroup(replacing: .pasteboard) {
             MenuItem(title: "Cut", id: "cut", model: model, action: { cut() })
@@ -140,6 +148,8 @@ private struct EditMenuCommands: Commands {
     private func undo() {
         if !TextEditing.forward(TextEditing.undo) { model.performUndo() }
     }
+
+    private func redo() { _ = TextEditing.forward(TextEditing.redo) }
 
     private func cut() {
         if !TextEditing.forward(TextEditing.cut) { model.copy(model.targets, cut: true) }

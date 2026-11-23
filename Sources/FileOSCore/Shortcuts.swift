@@ -85,7 +85,7 @@ public enum Shortcuts {
             "selectAll": "Cmd+A", "copyPath": "Alt+Cmd+C", "makeAlias": "Ctrl+Cmd+A", "airDrop": "Shift+Cmd+R",
             "showInFinder": "Cmd+R", "addToSidebar": "Ctrl+Cmd+T", "openInTerminal": "Alt+Shift+Cmd+T",
             "openInEditor": "Alt+Shift+Cmd+E", "editF4": "F4", "newTerminalTab": "Alt+Cmd+T",
-            "trash": "Cmd+Delete", "trashF8": "F8", "undo": "Cmd+Z", "quickActions": "Cmd+.",
+            "trash": "Cmd+Delete", "trashF8": "F8", "undo": "Cmd+Z", "redo": "Shift+Cmd+Z", "quickActions": "Cmd+.",
             // Two panes
             "dualPane": "Cmd+D", "switchPane": "Tab", "copyToOtherPane": "F5", "moveToOtherPane": "F6",
             "swapPanes": "Cmd+U",
@@ -101,7 +101,7 @@ public enum Shortcuts {
     }()
 
     /// System-standard shortcuts users can't rebind.
-    public static let fixed: Set<String> = ["copy", "cut", "paste", "selectAll", "undo", "settings", "quit"]
+    public static let fixed: Set<String> = ["copy", "cut", "paste", "selectAll", "undo", "redo", "settings", "quit"]
 
     /// The other action already using `combo`, if any.
     public static func conflict(in map: [String: KeyCombo], action: String, combo: KeyCombo) -> String? {

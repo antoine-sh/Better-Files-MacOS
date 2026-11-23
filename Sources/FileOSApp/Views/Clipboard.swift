@@ -10,25 +10,30 @@ struct Clipboard: Equatable {
 
 @MainActor
 enum Pasteboard {
-    static var changeCount: Int { NSPasteboard.general.changeCount }
+    /// The self-test swaps in a private named pasteboard so it never touches the user's clipboard.
+    static var board: NSPasteboard = .general
+
+    static var changeCount: Int { board.changeCount }
+
+    static func clear() { board.clearContents() }
 
     /// Returns the pasteboard's change count after writing.
     static func write(_ urls: [URL]) -> Int {
-        let pb = NSPasteboard.general
+        let pb = board
         pb.clearContents()
         pb.writeObjects(urls.map { (u: URL) -> NSURL in u as NSURL })
         return pb.changeCount
     }
 
     static func write(_ text: String) {
-        let pb = NSPasteboard.general
+        let pb = board
         pb.clearContents()
         pb.setString(text, forType: .string)
     }
 
     static func fileURLs() -> [URL] {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
-        let objects: [Any] = NSPasteboard.general.readObjects(forClasses: [NSURL.self], options: options) ?? []
+        let objects: [Any] = board.readObjects(forClasses: [NSURL.self], options: options) ?? []
         return objects.compactMap { (o: Any) -> URL? in o as? URL }
     }
 }
@@ -50,4 +55,5 @@ enum TextEditing {
     static let paste = #selector(NSText.paste(_:))
     static let selectAll = #selector(NSText.selectAll(_:))
     static let undo = Selector(("undo:"))
+    static let redo = Selector(("redo:"))
 }

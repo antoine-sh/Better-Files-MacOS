@@ -133,7 +133,7 @@ private struct NameCell: View {
     }
 
     @ViewBuilder private var name: some View {
-        if pane.renaming == row.id {
+        if pane.hostsRename(row.id, preview: false) {
             RenameField(url: row.entry.url)
         } else {
             Text(row.entry.name).lineLimit(1).truncationMode(.middle)

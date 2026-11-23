@@ -48,8 +48,10 @@ final class PaneModel {
     private(set) var children: [String: [Entry]] = [:]
     /// Column view: folders opened to the right of `url`, outermost first.
     private(set) var trail: [URL] = []
-    /// The item showing an inline rename field.
+    /// The item showing an inline rename field, and whether the preview pane hosts the field rather
+    /// than the item's row: exactly one field may exist, or the one that loses focus commits early.
     var renaming: String?
+    var renamingInPreview = false
     private var anchor: String?
     private var cursor: String?
     private(set) var error: FileOSError?
@@ -75,7 +77,13 @@ final class PaneModel {
     var canGoUp: Bool { url.path != "/" }
 
     /// Where new folders and pastes land: the deepest open column in column view, else this folder.
-    var currentFolder: URL { view == .columns ? (trail.last ?? url) : url }
+    var currentFolder: URL {
+        guard view == .columns, let index = selectedColumn else { return url }
+        return columnDirs[index]
+    }
+
+    /// Whether the rename field for `id` belongs in the preview pane (`preview`) or in its row.
+    func hostsRename(_ id: String, preview: Bool) -> Bool { renaming == id && renamingInPreview == preview }
 
     /// Top-level entries after the filter and the folder's sort.
     // shortcut: recomputed per render; cache it if huge folders get slow
@@ -105,6 +113,21 @@ final class PaneModel {
     }
 
     var selectedURLs: [URL] { selection.sorted().map { (p: String) -> URL in URL(fileURLWithPath: p) } }
+
+    /// Selected items currently on screen (the filter or a collapsed folder can hide some):
+    /// what menu commands like Move to Trash act on.
+    var visibleSelectedURLs: [URL] {
+        var shown: [String]
+        if view == .columns {
+            shown = []
+            for index in columnDirs.indices {
+                shown += columnEntries(index).map { (e: Entry) -> String in e.id }
+            }
+        } else {
+            shown = rows.map { (r: Row) -> String in r.id }
+        }
+        return shown.filter { (id: String) -> Bool in selection.contains(id) }.map { (p: String) -> URL in URL(fileURLWithPath: p) }
+    }
 
     /// Selected items the filter still shows, for the status bar.
     var visibleSelectionCount: Int {
@@ -174,6 +197,7 @@ final class PaneModel {
         children = [:]
         trail = []
         renaming = nil
+        renamingInPreview = false
         selection = select.map { (u: URL) -> Set<String> in [FileOps.canonical(u).path] } ?? []
         anchor = selection.first
         cursor = anchor
@@ -317,7 +341,7 @@ final class PaneModel {
     }
 
     /// The column holding the current selection (the cursor's column).
-    private var selectedColumn: Int? {
+    var selectedColumn: Int? {
         guard let id = cursor ?? selection.first else { return nil }
         let parent: URL = FileOps.canonical(URL(fileURLWithPath: id).deletingLastPathComponent())
         return columnDirs.firstIndex(of: parent)

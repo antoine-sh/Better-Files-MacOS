@@ -12,6 +12,7 @@ enum SelfTest {
         let docs = home.appendingPathComponent("Documents")
         try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         try? "a".write(to: docs.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        Pasteboard.board = NSPasteboard(name: NSPasteboard.Name("com.fileos.selftest.\(UUID().uuidString)"))
         return AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
     }
 
@@ -222,6 +223,33 @@ enum SelfTest {
         model.cancelCut()
         r.append(("Esc cancels a cut", !model.isCut(aTxt.path)))
 
+        // Two pastes at once: the second waits for the first (which is asking about a clash), both finish and undo.
+        let spare: URL = home.appendingPathComponent("Spare")
+        try? FileManager.default.createDirectory(at: spare, withIntermediateDirectories: true)
+        model.copy([aTxt])
+        let firstPaste = Task { await model.paste(into: home) }
+        let secondPaste = Task { await model.paste(into: spare) }
+        var clashed = false
+        for _ in 0..<100 where !clashed {
+            try? await Task.sleep(for: .milliseconds(20))
+            clashed = model.clashPrompt != nil
+        }
+        r.append(("overlapping paste waits for the first", clashed && !exists(spare.appendingPathComponent("a.txt"))))
+        model.answerClash(.keepBoth, all: false)
+        await firstPaste.value
+        await secondPaste.value
+        let kept: URL = home.appendingPathComponent("a 2.txt")
+        let second: URL = spare.appendingPathComponent("a.txt")
+        r.append(("overlapping pastes both complete", exists(kept) && exists(second)))
+        await model.undoLast()
+        await model.undoLast()
+        r.append(("overlapping pastes are both undoable", !exists(kept) && !exists(second)))
+
+        pane.selection = [aTxt.path]
+        pane.filter = "zzz"
+        r.append(("commands skip selected items the filter hides", model.targets.isEmpty))
+        pane.filter = ""
+
         model.duplicate([aTxt])
         r.append(("duplicate makes “a copy.txt”", exists(docs.appendingPathComponent("a copy.txt"))))
 
@@ -255,6 +283,16 @@ enum SelfTest {
         r.append(("icons view replaces the table", pane.view == .icons && tableCount(model) < listTables))
         model.setView(.columns)
         r.append(("columns view replaces the table", pane.view == .columns && tableCount(model) < listTables))
+        if !model.showPreview { model.togglePreview() }
+        model.newFolder()
+        let fresh: String = pane.renaming ?? ""
+        r.append(("one rename field: the row, not the preview",
+                  !fresh.isEmpty && pane.hostsRename(fresh, preview: false) && !pane.hostsRename(fresh, preview: true)))
+        model.beginRename([URL(fileURLWithPath: fresh)], inPreview: true)
+        r.append(("rename from the preview is hosted there only",
+                  pane.hostsRename(fresh, preview: true) && !pane.hostsRename(fresh, preview: false)))
+        model.cancelRename()
+        model.togglePreview()
         let reopenedView: ViewMode = AppModel(home: model.home, trashDir: model.trashDir).pane.view
         r.append(("view mode persisted", reopenedView == .columns))
         model.setView(.list)

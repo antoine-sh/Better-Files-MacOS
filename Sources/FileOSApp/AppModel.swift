@@ -46,6 +46,8 @@ final class AppModel {
     private(set) var showPreview: Bool
     var filterShown = false
     private(set) var clipboard: Clipboard?
+    /// The last transfer started; the next one waits for it (one at a time until Task 6's queue).
+    @ObservationIgnored var transferTail: Task<Void, Never>?
 
     // Dialogs (see FileDialogs)
     var clashPrompt: ClashPrompt?
@@ -276,8 +278,8 @@ struct ExtensionPrompt {
 // MARK: - File operations (F5). Every change goes through FileOSCore, registers an undo and shows a toast.
 
 extension AppModel {
-    /// The selection, or nothing.
-    var targets: [URL] { pane.selectedURLs }
+    /// The selected items that are on screen, or nothing.
+    var targets: [URL] { pane.visibleSelectedURLs }
 
     /// Undo for something we created: send it to the Trash, so anything put in it since stays recoverable.
     func undoByTrashing(_ label: String, _ urls: [URL]) {
@@ -311,6 +313,7 @@ extension AppModel {
             reloadAll()
             select([url])
             pane.renaming = url.path
+            pane.renamingInPreview = false
             toast("Created “\(url.lastPathComponent)”", undoable: true)
         } catch {
             fail(error)
@@ -385,7 +388,15 @@ extension AppModel {
         if forceMove { mode = .move }
         guard !sources.isEmpty else { return }
         let finished: Bool = await runTransfer(sources, to: dest, mode: mode)
-        if mode == .move, finished { clipboard = nil }
+        guard mode == .move else { return }
+        // Moved items are gone from where the pasteboard points; keep only what is still there.
+        let left: [URL] = sources.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
+        if finished || left.isEmpty {
+            Pasteboard.clear()
+            clipboard = nil
+        } else {
+            copy(left, cut: clipboard?.cut ?? false)
+        }
     }
 
     /// F5.3: same disk moves, another disk copies, ⌥ always copies.
@@ -398,14 +409,24 @@ extension AppModel {
     static func sameVolume(_ a: URL, _ b: URL) -> Bool {
         let key: Set<URLResourceKey> = [.volumeIdentifierKey]
         guard let x = (try? a.resourceValues(forKeys: key))?.volumeIdentifier as? NSObject,
-              let y = (try? b.resourceValues(forKeys: key))?.volumeIdentifier as? NSObject else { return true }
+              let y = (try? b.resourceValues(forKeys: key))?.volumeIdentifier as? NSObject else { return false } // unknown: copy, never move
         return x.isEqual(y)
     }
 
-    /// Runs one transfer, asking about clashes; true when every item was handled.
+    /// Runs one transfer after any earlier one finishes, asking about clashes; true when every item was handled.
     @discardableResult
     func runTransfer(_ sources: [URL], to dest: URL, mode: TransferMode) async -> Bool {
-        // shortcut: no progress UI or queue yet (Task 6's TransferQueue); big copies just take a while
+        // shortcut: no progress UI yet (Task 6's TransferQueue); transfers just run one after another
+        let previous: Task<Void, Never>? = transferTail
+        let job = Task { () async -> Bool in
+            await previous?.value
+            return await self.performTransfer(sources, to: dest, mode: mode)
+        }
+        transferTail = Task { _ = await job.value }
+        return await job.value
+    }
+
+    private func performTransfer(_ sources: [URL], to dest: URL, mode: TransferMode) async -> Bool {
         do {
             let result: TransferResult = try await transfer(sources, to: dest, mode: mode, trashDir: trashDir,
                                                             resolve: { (clash: Clash) async -> (ClashChoice, applyToAll: Bool) in
@@ -431,6 +452,8 @@ extension AppModel {
 
     func askClash(_ clash: Clash) async -> (ClashChoice, applyToAll: Bool) {
         let answer: (ClashChoice, Bool) = await withCheckedContinuation { (c: CheckedContinuation<(ClashChoice, Bool), Never>) in
+            // Transfers are serialised, but never strand an earlier question's transfer: stop it.
+            if let earlier = clashPrompt { earlier.continuation.resume(returning: (.stop, false)) }
             clashPrompt = ClashPrompt(clash: clash, continuation: c)
         }
         return (answer.0, applyToAll: answer.1)
@@ -445,10 +468,11 @@ extension AppModel {
     // MARK: Rename (F5.6, F5.7)
 
     /// Return / F2: one item renames inline, several open the batch sheet.
-    func beginRename(_ urls: [URL]? = nil) {
+    func beginRename(_ urls: [URL]? = nil, inPreview: Bool = false) {
         let urls: [URL] = urls ?? targets
         if urls.count == 1, let url = urls.first {
             pane.renaming = url.path
+            pane.renamingInPreview = inPreview
         } else if urls.count > 1 {
             batchRenameTargets = urls
             showBatchRename = true
