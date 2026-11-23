@@ -149,8 +149,9 @@ final class AppModel {
         savedLayouts = store.get("layouts", default: [SavedLayout]())
         // First launch: the sample "Acme Project" (F11.5). An empty saved list stays empty.
         let savedWorkspaces: [Workspace]? = store.get("workspaces", default: [Workspace]?.none)
-        workspaces = savedWorkspaces ?? [Workspaces.sample(home: FileOps.canonical(home))]
-        if savedWorkspaces == nil { store.set("workspaces", workspaces) }
+        let initialWorkspaces: [Workspace] = savedWorkspaces ?? [Workspaces.sample(home: FileOps.canonical(home))]
+        workspaces = initialWorkspaces
+        if savedWorkspaces == nil { store.set("workspaces", initialWorkspaces) }
         bookmarkState = BookmarkState(bookmarks: store.get("bookmarks", default: [Bookmark]()),
                                       collections: store.get("bookmarkCollections", default: [BookmarkCollection]()))
         let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: home.appendingPathComponent("Downloads"))
