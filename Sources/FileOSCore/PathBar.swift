@@ -65,7 +65,7 @@ public enum PathBar {
         return .missing(name: name, parent: parent, suggestion: best.map { display($0.1, home: home) })
     }
 
-    static func display(_ path: String, home: URL) -> String {
+    public static func display(_ path: String, home: URL) -> String {
         path == home.path ? "~" : path.hasPrefix(home.path + "/") ? "~" + path.dropFirst(home.path.count) : path
     }
 
