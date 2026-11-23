@@ -115,7 +115,7 @@ private struct FileMenuCommands: Commands {
     private func rename() { model.beginRename() }
     private func trash() {
         // ⌘⌫ in a text field deletes to the line start; never trash files from there.
-        if TextEditing.forward(Selector(("deleteToBeginningOfLine:"))) { return }
+        if TextEditing.forward(#selector(NSResponder.deleteToBeginningOfLine(_:))) { return }
         model.trash(model.targets)
     }
 }
