@@ -16,6 +16,7 @@ enum SelfTest {
         Pasteboard.board = NSPasteboard(name: NSPasteboard.Name("com.fileos.selftest.\(UUID().uuidString)"))
         let model = AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
         model.cleanApplications = [home.appendingPathComponent("Applications")] // not the runner's real apps
+        model.fetchesLinkMeta = false // CI must not depend on the network
         return model
     }
 
@@ -127,7 +128,7 @@ enum SelfTest {
             check("Try Again after access is granted lists it", pane.error == nil)
         }
 
-        let pages: [Page] = [.freeUpSpace, .installed, .agents, .aboutMac]
+        let pages: [Page] = [.freeUpSpace, .installed, .agents, .aboutMac, .bookmarks, .workspace(Workspaces.sampleID)]
         for page in pages {
             model.page = page
             let views: [NSView] = hostedViews(model)
@@ -148,6 +149,7 @@ enum SelfTest {
         await peekChecks(model, check)
         await markdownChecks(model, check)
         await smartChecks(model, check)
+        await libraryChecks(model, check)
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -700,6 +702,98 @@ enum SelfTest {
         check("the moved item leaves its card", model.clean.ticked.isEmpty)
         await model.undoLast()
         check("undoing Smart Clean restores the spare", exists(spare))
+    }
+
+    /// F11 Workspaces, F12 Bookmarks, and ⌘K finding both.
+    static func libraryChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let taxes: URL = model.home.appendingPathComponent("Documents/Taxes")
+        try? fm.createDirectory(at: taxes, withIntermediateDirectories: true)
+        try? "r".write(to: taxes.appendingPathComponent("receipt.pdf"), atomically: true, encoding: .utf8)
+        check("the sample workspace is there", model.workspace(Workspaces.sampleID)?.name == "Acme Project")
+
+        var draft = WorkspaceDraft()
+        draft.name = "Taxes 2026"
+        draft.color = "green"
+        let problem: String? = model.commitWorkspaceDraft(draft)
+        guard let w = model.workspaces.first(where: { (x: Workspace) -> Bool in x.name == "Taxes 2026" }) else {
+            return check("New Workspace creates “Taxes 2026”", false)
+        }
+        check("New Workspace opens “Taxes 2026”", problem == nil && model.page == .workspace(w.id))
+        model.addToWorkspace(w.id, [taxes])
+        check("Add to Workspace toast", hasToast(model, "Added 1 item to “Taxes 2026”"))
+        model.addToWorkspace(w.id, [taxes])
+        let items: [WorkspaceItem] = model.workspace(w.id)?.items ?? []
+        check("adding a folder twice lists it once", items.count == 1 && items.first?.kind == .folder
+                && items.first?.path == FileOps.canonical(taxes).path)
+        check("the folder is still on disk at its path", AppModel.isBrowsableFolder(taxes)
+                && exists(taxes.appendingPathComponent("receipt.pdf")))
+        check("the workspace page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        let stored: [Workspace] = Store(url: model.home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
+            .get("workspaces", default: [Workspace]())
+        check("workspaces are saved", stored.contains { (x: Workspace) -> Bool in x.id == w.id && x.items.count == 1 })
+
+        if let item = items.first {
+            model.setPinned(w.id, item.id, true)
+            model.openPinned(1)
+            check("⌃⌥1 opens the pinned folder", model.page == .browser && model.pane.url == FileOps.canonical(taxes))
+            model.page = .workspace(w.id)
+            model.removeFromWorkspace(w.id, [item.id])
+            check("Remove only unlists", model.workspace(w.id)?.items.isEmpty == true && exists(taxes))
+            await model.undoLast()
+            check("undo puts the item back", model.workspace(w.id)?.items.count == 1)
+        }
+        let gone: URL = model.home.appendingPathComponent("Gone")
+        try? fm.createDirectory(at: gone, withIntermediateDirectories: true)
+        model.addToWorkspace(w.id, [gone])
+        try? fm.removeItem(at: gone)
+        let goneItem: WorkspaceItem? = model.workspace(w.id)?.items.first { (i: WorkspaceItem) -> Bool in i.name == "Gone" }
+        check("a missing item says Can't find it", goneItem.map { (i: WorkspaceItem) -> String? in model.itemStatus(i).text } == "Can't find it")
+
+        model.archiveWorkspace(w.id)
+        check("Archive hides it from ⌃1–⌃9", !model.activeWorkspaces.contains { (x: Workspace) -> Bool in x.id == w.id })
+        model.restoreWorkspace(w.id)
+        model.deleteWorkspace(w.id)
+        check("Delete removes the workspace and leaves its page", model.workspace(w.id) == nil && model.page == .browser && exists(taxes))
+        await model.undoLast()
+        check("undoing Delete brings it back", model.workspace(w.id)?.items.count == 2)
+
+        Pasteboard.clear()
+        model.page = .bookmarks
+        let handled: Bool = model.pasteOnPage()
+        check("⌘V on Bookmarks without a link saves nothing", handled && model.bookmarkState.bookmarks.isEmpty
+                && model.toasts.contains { (t: Toast) -> Bool in t.text == "Copy a link first" })
+        Pasteboard.write("https://example.com/taxes-guide")
+        _ = model.pasteOnPage()
+        check("⌘V on Bookmarks saves the copied link", hasToast(model, "Saved")
+                && model.bookmarkState.bookmarks.map { (b: Bookmark) -> String in b.url } == ["https://example.com/taxes-guide"])
+        model.saveLink("example.com/taxes-guide")
+        check("saving it again says Already saved", model.toasts.contains { (t: Toast) -> Bool in t.text == "Already saved" }
+                && model.bookmarkState.bookmarks.count == 1)
+        check("the Bookmarks page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+
+        model.search.query = "taxes"
+        model.search.chip = .all
+        model.runSearch()
+        let named: [NamedMatch] = model.search.named
+        check("⌘K finds the workspace", named.contains { (n: NamedMatch) -> Bool in n.kind == .workspace && n.target == w.id.uuidString })
+        check("⌘K finds the bookmark", named.contains { (n: NamedMatch) -> Bool in n.kind == .bookmark && n.target == "https://example.com/taxes-guide" })
+        if let row = model.search.rows.first(where: { (r: PaletteRow) -> Bool in r.id == "Workspace:\(w.id.uuidString)" }) {
+            model.openPaletteRow(row)
+        }
+        check("Return on a ⌘K workspace opens it", model.page == .workspace(w.id))
+        await model.search.pending?.value
+
+        model.createCollection(name: "Reading", icon: "book")
+        guard let reading = model.placeCollection else { return check("New Collection opens it", false) }
+        model.saveLink("https://swift.org/blog", collection: reading)
+        model.deleteCollection(reading)
+        check("deleting a collection removes its links", model.bookmarkState.collections.isEmpty
+                && model.bookmarkState.bookmarks.count == 1 && model.bookmarkPlace == .all)
+        await model.undoLast()
+        check("undoing Delete Collection brings them back", model.bookmarkState.collections.count == 1
+                && model.bookmarkState.bookmarks.count == 2)
+        model.page = .browser
     }
 
     /// Hosts MainWindow like `hostedViews`, but keeps it up (up to 5 s) until `done` holds, so `.onAppear`

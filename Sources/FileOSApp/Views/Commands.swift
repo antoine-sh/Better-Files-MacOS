@@ -71,6 +71,37 @@ struct FileOSCommands: Commands {
         EditMenuCommands(model: model)
         ViewMenuCommands(model: model)
         GoMenuCommands(model: model)
+        LibraryCommands(model: model)
+    }
+}
+
+/// F11 / F12 keys: ⌥⌘N, ⌃1–⌃9, ⌃⌥1–6, ⌥⇧⌘N, ⇧⌘L, ⌃⌥⌘B.
+private struct LibraryCommands: Commands {
+    let model: AppModel
+
+    var body: some Commands {
+        CommandMenu("Workspaces") {
+            MenuItem(title: "New Workspace…", id: "newWorkspace", model: model, action: { model.newWorkspace() })
+            Divider()
+            ForEach(Array(model.activeWorkspaces.prefix(9).enumerated()), id: \.element.id) { (pair: (offset: Int, element: Workspace)) in
+                MenuItem(title: pair.element.name, id: "workspace\(pair.offset + 1)", model: model,
+                         action: { model.openWorkspace(number: pair.offset + 1) })
+            }
+            Divider()
+            Menu("Pinned") {
+                ForEach(1...6, id: \.self) { (n: Int) in
+                    MenuItem(title: model.pinnedItem(n)?.name ?? "Pinned Item \(n)", id: "pinnedWorkspace\(n)", model: model,
+                             disabled: model.pinnedItem(n) == nil, action: { model.openPinned(n) })
+                }
+            }
+        }
+        CommandMenu("Bookmarks") {
+            MenuItem(title: "Bookmarks", id: "bookmarks", model: model, action: { model.page = .bookmarks })
+            Divider()
+            MenuItem(title: "Add Link…", id: "bookmarkList", model: model, action: { model.showAddLink = true })
+            MenuItem(title: "Save Copied Link", id: "bookmarksPage", model: model, action: { model.saveCopiedLink() })
+            MenuItem(title: "New Collection…", id: "addBookmark", model: model, action: { model.askNewCollection() })
+        }
     }
 }
 
@@ -174,6 +205,7 @@ private struct EditMenuCommands: Commands {
 
     private func paste(move: Bool) {
         if !move, TextEditing.forward(TextEditing.paste) { return }
+        if !move, model.pasteOnPage() { return } // links on Bookmarks and workspaces (F11.2, F12.1)
         Task { await model.paste(move: move) }
     }
 

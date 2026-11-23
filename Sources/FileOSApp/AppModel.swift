@@ -97,6 +97,21 @@ final class AppModel {
     var page: Page = .browser
     private(set) var toasts: [Toast] = []
 
+    // Workspaces (F11) and Bookmarks (F12); only `setWorkspaces` / `setBookmarks` write the lists.
+    var workspaces: [Workspace]
+    var bookmarkState: BookmarkState
+    var bookmarkPlace: BookmarkPlace = .all
+    var workspaceDraft = WorkspaceDraft()
+    var showWorkspaceSheet = false
+    var workspaceToDelete: UUID?
+    var showDeleteWorkspace = false
+    var showAddLink = false
+    var showNewCollection = false
+    var collectionToDelete: UUID?
+    var showDeleteCollection = false
+    /// Off for the self-test: CI must not depend on the network.
+    var fetchesLinkMeta = true
+
     /// Path bar edit mode (⌘L / ⇧⌘G) and the last "no folder called …" result.
     var editingPath = false
     var pathError: (name: String, parent: URL, suggestion: String?)?
@@ -132,6 +147,12 @@ final class AppModel {
         symbolOverrides = store.get(Self.symbolsKey, default: [String: String]())
         colorOverrides = store.get(Self.colorsKey, default: [String: String]())
         savedLayouts = store.get("layouts", default: [SavedLayout]())
+        // First launch: the sample "Acme Project" (F11.5). An empty saved list stays empty.
+        let savedWorkspaces: [Workspace]? = store.get("workspaces", default: [Workspace]?.none)
+        workspaces = savedWorkspaces ?? [Workspaces.sample(home: FileOps.canonical(home))]
+        if savedWorkspaces == nil { store.set("workspaces", workspaces) }
+        bookmarkState = BookmarkState(bookmarks: store.get("bookmarks", default: [Bookmark]()),
+                                      collections: store.get("bookmarkCollections", default: [BookmarkCollection]()))
         let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: home.appendingPathComponent("Downloads"))
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]

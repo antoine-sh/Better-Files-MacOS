@@ -17,6 +17,7 @@ struct MainWindow: View {
         .overlay { PeekOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
         .modifier(SmartDialogs(model: model))
+        .modifier(LibraryDialogs(model: model))
         .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
     }
 
@@ -31,6 +32,10 @@ struct MainWindow: View {
             MarkdownPage(doc: doc)
         } else if model.page == .freeUpSpace {
             FreeUpSpaceView(clean: model.clean)
+        } else if model.page == .bookmarks {
+            BookmarksPage()
+        } else if case .workspace(let id) = model.page {
+            WorkspacePage(id: id).id(id) // fresh tab, view and search per workspace
         } else {
             PlaceholderPage(title: model.page.title)
         }
@@ -240,6 +245,65 @@ struct SmartDialogs: ViewModifier {
             .sheet(isPresented: $model.showSymbolChooser) {
                 SymbolChooser(urls: model.symbolTargets).environment(model)
             }
+    }
+}
+
+/// Workspaces (F11) and Bookmarks (F12): New/Edit Workspace, delete confirmations, Add Link, New Collection.
+struct LibraryDialogs: ViewModifier {
+    @Bindable var model: AppModel
+    @State private var linkText = ""
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $model.showWorkspaceSheet) {
+                NewWorkspaceSheet().environment(model)
+            }
+            .sheet(isPresented: $model.showNewCollection) {
+                NewCollectionSheet().environment(model)
+            }
+            .alert(deleteWorkspaceTitle, isPresented: $model.showDeleteWorkspace) {
+                Button("Delete", role: .destructive, action: { deleteWorkspace() })
+                Button("Cancel", role: .cancel, action: {})
+            } message: {
+                Text(AppModel.deleteWorkspaceMessage(workspaceName))
+            }
+            .alert(deleteCollectionTitle, isPresented: $model.showDeleteCollection) {
+                Button("Delete", role: .destructive, action: { deleteCollection() })
+                Button("Cancel", role: .cancel, action: {})
+            } message: {
+                Text(collectionMessage)
+            }
+            .alert("Add Link", isPresented: $model.showAddLink) {
+                TextField("https://", text: $linkText)
+                Button("Save", action: { saveLink() })
+                Button("Cancel", role: .cancel, action: {})
+            }
+    }
+
+    private var workspaceName: String { model.workspaceToDelete.flatMap { (id: UUID) -> String? in model.workspace(id)?.name } ?? "" }
+    private var deleteWorkspaceTitle: String { "Delete “\(workspaceName)”?" }
+    private var deleteCollectionTitle: String {
+        let name: String = model.collectionToDelete.flatMap { (id: UUID) -> String? in model.collection(id)?.name } ?? ""
+        return "Delete “\(name)”?"
+    }
+    private var collectionMessage: String {
+        model.collectionToDelete.map { (id: UUID) -> String in model.deleteCollectionMessage(id) } ?? ""
+    }
+
+    private func deleteWorkspace() {
+        if let id = model.workspaceToDelete { model.deleteWorkspace(id) }
+        model.workspaceToDelete = nil
+    }
+
+    private func deleteCollection() {
+        if let id = model.collectionToDelete { model.deleteCollection(id) }
+        model.collectionToDelete = nil
+    }
+
+    private func saveLink() {
+        let text: String = linkText
+        linkText = ""
+        model.saveLink(text, collection: model.page == .bookmarks ? model.placeCollection : nil)
     }
 }
 

@@ -2,7 +2,7 @@ import SwiftUI
 import FileOSCore
 
 enum SidebarItem: Hashable, Sendable {
-    case folder(URL), page(Page)
+    case folder(URL), page(Page), bookmarks(BookmarkPlace)
 }
 
 struct SidebarView: View {
@@ -10,12 +10,16 @@ struct SidebarView: View {
     // Plain @State instead of Binding(get:set:): Swift 6.1's IRGen crashed on the
     // isolation thunk for a Binding<SidebarItem?> built from closures.
     @State private var selection: SidebarItem?
+    @State private var workspacesOpen = true
+    @State private var bookmarksOpen = true
     @State private var favoritesOpen = true
     @State private var toolsOpen = true
     @State private var locationsOpen = false // F2.1: Locations always starts folded
 
     var body: some View {
         List(selection: $selection) {
+            WorkspacesSection(open: $workspacesOpen)
+            BookmarksSection(open: $bookmarksOpen)
             favorites
             tools
             locations
@@ -26,6 +30,9 @@ struct SidebarView: View {
         .onChange(of: selection) { applySelection() }
         .onChange(of: model.page) { syncSelection() }
         .onChange(of: model.pane.url) { syncSelection() }
+        .onChange(of: model.bookmarkPlace) { syncSelection() }
+        .onChange(of: workspacesOpen) { model.setExpanded("Workspaces", workspacesOpen) }
+        .onChange(of: bookmarksOpen) { model.setExpanded("Bookmarks", bookmarksOpen) }
         .onChange(of: favoritesOpen) { model.setExpanded("Favorites", favoritesOpen) }
         .onChange(of: toolsOpen) { model.setExpanded("Tools", toolsOpen) }
     }
@@ -68,10 +75,13 @@ struct SidebarView: View {
 
     private func currentItem() -> SidebarItem {
         if model.page == .browser { return .folder(model.pane.url) }
+        if model.page == .bookmarks { return .bookmarks(model.bookmarkPlace) }
         return .page(model.page)
     }
 
     private func loadState() {
+        workspacesOpen = model.isExpanded("Workspaces")
+        bookmarksOpen = model.isExpanded("Bookmarks")
         favoritesOpen = model.isExpanded("Favorites")
         toolsOpen = model.isExpanded("Tools")
         syncSelection()
@@ -87,6 +97,9 @@ struct SidebarView: View {
         switch item {
         case .folder(let url): model.open(url)
         case .page(let page): model.page = page
+        case .bookmarks(let place):
+            model.bookmarkPlace = place
+            model.page = .bookmarks
         }
     }
 
@@ -98,6 +111,97 @@ struct SidebarView: View {
         case "Pictures": return "photo"
         default: return "folder"
         }
+    }
+}
+
+/// F2.1 Workspaces (+ / ⌥⌘N). Drops add the items; nothing moves (F2.3).
+private struct WorkspacesSection: View {
+    @Binding var open: Bool
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Section(isExpanded: $open) {
+            ForEach(model.workspaces) { (w: Workspace) in WorkspaceRow(workspace: w) }
+        } header: {
+            HStack {
+                Text("Workspaces")
+                Spacer()
+                Button(action: { model.newWorkspace() }) { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .help("New Workspace (⌥⌘N)")
+                    .accessibilityLabel("New Workspace")
+            }
+        }
+    }
+}
+
+private struct WorkspaceRow: View {
+    let workspace: Workspace
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Label {
+            Text(workspace.name).foregroundStyle(workspace.archived ? Color.secondary : Color.primary)
+        } icon: {
+            Image(systemName: workspace.archived ? "archivebox" : "circle.fill")
+                .foregroundStyle(workspaceColor(workspace.color))
+        }
+        .tag(SidebarItem.page(.workspace(workspace.id)))
+        .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in
+            model.addToWorkspace(workspace.id, urls)
+            return true
+        }
+        .contextMenu { WorkspaceRowMenu(workspace: workspace) }
+    }
+}
+
+private struct WorkspaceRowMenu: View {
+    let workspace: Workspace
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button("Edit Workspace…", action: { model.editWorkspace(workspace.id) })
+        if workspace.archived {
+            Button("Restore", action: { model.restoreWorkspace(workspace.id) })
+        } else {
+            Button("Archive", action: { model.archiveWorkspace(workspace.id) })
+        }
+        Button("Delete…", action: { model.askDeleteWorkspace(workspace.id) })
+    }
+}
+
+/// F2.1 Bookmarks: All Bookmarks, Favourites, Unsorted, collections. Dropped links are saved (F2.3).
+private struct BookmarksSection: View {
+    @Binding var open: Bool
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Section("Bookmarks", isExpanded: $open) {
+            BookmarkPlaceRow(title: "All Bookmarks", symbol: "bookmark", place: .all, collection: nil)
+            BookmarkPlaceRow(title: "Favourites", symbol: "star", place: .favourites, collection: nil)
+            BookmarkPlaceRow(title: "Unsorted", symbol: "tray", place: .unsorted, collection: nil)
+            ForEach(model.bookmarkState.collections) { (c: BookmarkCollection) in
+                BookmarkPlaceRow(title: c.name, symbol: c.icon, place: .collection(c.id), collection: c.id)
+                    .contextMenu { Button("Delete Collection…", action: { model.askDeleteCollection(c.id) }) }
+            }
+        }
+    }
+}
+
+private struct BookmarkPlaceRow: View {
+    let title: String
+    let symbol: String
+    let place: BookmarkPlace
+    let collection: UUID?
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Label(title, systemImage: symbol)
+            .tag(SidebarItem.bookmarks(place))
+            .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in
+                model.saveLinks(urls, collection: collection)
+                return true
+            }
     }
 }
 

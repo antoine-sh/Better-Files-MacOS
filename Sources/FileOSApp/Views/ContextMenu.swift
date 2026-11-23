@@ -3,8 +3,7 @@ import AppKit
 import FileOSCore
 
 /// F3.10: the right-click menu for items, or (with no ids) for the folder's background.
-// shortcut: Peek, Quick Look, Add to Workspace and Pin to Drop Shelf join
-// this menu with their features (Tasks 7–11)
+// shortcut: Peek, Quick Look and Pin to Drop Shelf join this menu with their features (Tasks 7–11)
 struct FileContextMenu: View {
     let ids: Set<String>
     @Environment(AppModel.self) private var model
@@ -39,6 +38,7 @@ struct FileContextMenu: View {
         Group {
             Button("Show in Finder", action: { act { model.showInFinder(urls) } })
             Button("Add to Sidebar", action: { act { model.addToSidebar(urls) } })
+            AddToWorkspaceMenu(urls: urls)
             Button("AirDrop…", action: { act { model.airDrop(urls) } })
                 .disabled(!model.canAirDrop(urls))
             Divider()
@@ -76,6 +76,7 @@ struct FileContextMenu: View {
         Button("Copy Path", action: { act { model.copyPath([]) } })
         Button("Show in Finder", action: { act { model.showInFinder([]) } })
         Button("Add to Sidebar", action: { act { model.addToSidebar([]) } })
+        AddToWorkspaceMenu(urls: [(owner ?? model.pane).currentFolder])
         if (owner ?? model.pane).url == model.trashURL {
             Divider()
             Button("Empty Trash…", action: { act { model.askEmptyTrash() } })

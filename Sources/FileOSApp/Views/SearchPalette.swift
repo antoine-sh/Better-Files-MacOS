@@ -23,15 +23,6 @@ enum PaletteRow: Identifiable, Hashable {
     }
 }
 
-/// The store's workspaces and bookmarks, read loosely: only their names and targets matter here.
-// shortcut: decodes a flat array under "workspaces"/"bookmarks"; Task 9 owns the real types and may adapt this
-private struct StoredItem: Codable {
-    var id: String?
-    var name: String?
-    var title: String?
-    var url: String?
-}
-
 /// ⌘K state. The disk search runs off the main actor and is cancelled whenever the query changes.
 @MainActor @Observable
 final class SearchModel {
@@ -88,16 +79,13 @@ final class SearchModel {
         func matches(_ s: String) -> Bool { s.range(of: q, options: .caseInsensitive) != nil }
         var out: [NamedMatch] = []
         if chip == .all || chip == .workspaces {
-            for w in store.get("workspaces", default: [StoredItem]()) {
-                if let name = w.name, matches(name) { out.append(NamedMatch(kind: .workspace, name: name, target: w.id ?? name)) }
+            for w in store.get("workspaces", default: [Workspace]()) where !w.archived && matches(w.name) {
+                out.append(NamedMatch(kind: .workspace, name: w.name, target: w.id.uuidString))
             }
         }
         if chip == .all || chip == .bookmarks {
-            for b in store.get("bookmarks", default: [StoredItem]()) {
-                let name: String = b.title ?? b.name ?? b.url ?? ""
-                if let url = b.url, matches(name) || matches(url) {
-                    out.append(NamedMatch(kind: .bookmark, name: name, target: url))
-                }
+            for b in store.get("bookmarks", default: [Bookmark]()) where matches(b.title) || matches(b.url) || b.tags.contains(where: { (t: String) -> Bool in matches(t) }) {
+                out.append(NamedMatch(kind: .bookmark, name: b.title, target: b.url))
             }
         }
         if chip == .all {

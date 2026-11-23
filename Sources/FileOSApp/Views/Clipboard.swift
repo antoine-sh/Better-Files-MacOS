@@ -31,6 +31,12 @@ enum Pasteboard {
         pb.setString(text, forType: .string)
     }
 
+    /// Copied text (e.g. a link), trimmed; nil when there is none.
+    static func string() -> String? {
+        let text: String? = board.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text?.isEmpty == false ? text : nil
+    }
+
     static func fileURLs() -> [URL] {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         let objects: [Any] = board.readObjects(forClasses: [NSURL.self], options: options) ?? []

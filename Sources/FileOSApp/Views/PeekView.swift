@@ -45,7 +45,6 @@ private struct PeekPanel: View {
     }
 }
 
-// shortcut: no "Add to Workspace" button until workspaces exist (Task 9)
 private struct PeekHeader: View {
     let peek: PeekModel
     let url: URL
@@ -71,6 +70,7 @@ private struct PeekHeader: View {
         Button("Open", action: { model.peekOpen() }).help("Open (Return)")
         OpenWithMenu(url: url)
         ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") }
+        AddToWorkspaceMenu(urls: [url]).fixedSize().help("Add to Workspace")
         IconButton(symbol: "folder", label: "Show in Finder", help: "Show in Finder", disabled: false,
                    action: { model.showInFinder([url]) })
         IconButton(symbol: peek.showInfo ? "info.circle.fill" : "info.circle", label: "Info", help: "Info",
