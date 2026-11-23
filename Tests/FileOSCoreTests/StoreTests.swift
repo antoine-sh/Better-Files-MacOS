@@ -39,4 +39,19 @@ final class StoreTests: XCTestCase {
         s.set("x", "text")
         XCTAssertEqual(s.get("x", default: 5), 5)
     }
+
+    func testArraysDecodeElementByElementAndKeepWhatTheyCannotRead() throws {
+        let url = makeTempDir().appendingPathComponent("state.json")
+        let json = #"{"list": [{"view": "list", "size": 1}, {"view": "future", "size": "huge"}, {"view": "icons", "size": 2}]}"#
+        try json.write(to: url, atomically: true, encoding: .utf8)
+        let s = Store(url: url)
+        XCTAssertNil(s.getArray("absent", of: Prefs.self))
+        XCTAssertEqual(s.getArray("list", of: Prefs.self), [Prefs(view: "list", size: 1), Prefs(view: "icons", size: 2)])
+        s.setArray("list", [Prefs(view: "cards", size: 3)])
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+        let list = raw["list"] as! [[String: Any]]
+        XCTAssertEqual(list.count, 2) // the new value plus the unreadable one, never dropped
+        XCTAssertEqual(list[1]["view"] as? String, "future")
+        XCTAssertEqual(Store(url: url).getArray("list", of: Prefs.self), [Prefs(view: "cards", size: 3)])
+    }
 }

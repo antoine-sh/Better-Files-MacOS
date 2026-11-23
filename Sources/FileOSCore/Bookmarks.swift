@@ -166,10 +166,53 @@ public enum Bookmarks {
 
     // MARK: Page metadata
 
+    /// False for addresses that point into the user's own machine or network (loopback, private, link-local,
+    /// CGNAT, multicast, `.local`), and for numeric hosts that aren't a plain dotted quad, so a saved link can
+    /// never make the app fetch from them.
+    // shortcut: checks the host as written; a public name that resolves to a private address still passes —
+    // resolve and check before connecting if links ever fetch more than a page's <head>
+    public static func isPublicHost(_ raw: String) -> Bool {
+        var host = raw.lowercased()
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        if host.hasSuffix(".") { host.removeLast() }
+        guard !host.isEmpty, host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local"),
+              !host.hasSuffix(".internal") else { return false }
+        if host.contains(":") { // IPv6 literal
+            let blocked = ["fe8", "fe9", "fea", "feb", "fc", "fd", "ff", "::ffff:", "64:ff9b:"]
+            return host != "::" && host != "::1" && !blocked.contains { host.hasPrefix($0) }
+        }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard let last = labels.last, last.allSatisfy(\.isNumber) || last.hasPrefix("0x") else { return true }
+        // Numeric: only an unambiguous dotted quad (no hex, octal-looking or shortened forms).
+        let octets = labels.compactMap { (l: Substring) -> Int? in
+            l.count > 1 && l.hasPrefix("0") ? nil : Int(l).flatMap { $0 <= 255 ? $0 : nil }
+        }
+        guard labels.count == 4, octets.count == 4 else { return false }
+        let (a, b) = (octets[0], octets[1])
+        switch a {
+        case 0, 10, 127: return false
+        case 100 where (64...127).contains(b): return false
+        case 169 where b == 254: return false
+        case 172 where (16...31).contains(b): return false
+        case 192 where b == 168: return false
+        case 224...255: return false
+        default: return true
+        }
+    }
+
+    /// The part of a page worth reading: up to `</head>`, and never more than 128 KB, so hostile HTML stays cheap.
+    static func head(_ html: String) -> String {
+        let limited = html.utf8.count > 131_072 ? String(decoding: html.utf8.prefix(131_072), as: UTF8.self) : html
+        guard let end = limited.range(of: "</head>", options: .caseInsensitive) else { return limited }
+        return String(limited[..<end.lowerBound])
+    }
+
     /// og:title (else `<title>`), og:image and the `rel=icon` link, resolved against `base`; only http(s) results.
-    public static func extractMeta(html: String, base: URL) -> (title: String?, image: String?, icon: String?) {
+    /// Every pattern is linear: tags can't span a `<`, and are at most 2 KB.
+    public static func extractMeta(html fullHTML: String, base: URL) -> (title: String?, image: String?, icon: String?) {
+        let html = head(fullHTML)
         var ogTitle: String?, image: String?, icon: String?
-        for tag in matches(#"<meta\b[^>]*>"#, in: html) {
+        for tag in matches(#"<meta\b[^<>]{0,2048}>"#, in: html) {
             let a = attributes(tag)
             guard let content = a["content"] else { continue }
             switch (a["property"] ?? a["name"])?.lowercased() {
@@ -178,13 +221,15 @@ public enum Bookmarks {
             default: break
             }
         }
-        for tag in matches(#"<link\b[^>]*>"#, in: html) where icon == nil {
+        for tag in matches(#"<link\b[^<>]{0,2048}>"#, in: html) where icon == nil {
             let a = attributes(tag)
             let rel = (a["rel"] ?? "").lowercased().split(separator: " ")
             if rel.contains("icon") || rel.contains("apple-touch-icon") { icon = a["href"] }
         }
-        let plainTitle = firstGroup(#"<title[^>]*>(.*?)</title>"#, in: html)
-        let title = (ogTitle ?? plainTitle).map { decode($0).split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let plainTitle = firstGroup(#"<title[^<>]{0,256}>([^<]*)"#, in: html)
+        let title = (ogTitle ?? plainTitle).map { (t: String) -> String in
+            String(decode(t).split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(300))
+        }
         return (title?.isEmpty == true ? nil : title, resolve(image, base), resolve(icon, base))
     }
 

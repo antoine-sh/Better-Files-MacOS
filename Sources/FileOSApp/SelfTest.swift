@@ -730,7 +730,7 @@ enum SelfTest {
                 && exists(taxes.appendingPathComponent("receipt.pdf")))
         check("the workspace page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
         let stored: [Workspace] = Store(url: model.home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
-            .get("workspaces", default: [Workspace]())
+            .getArray("workspaces", of: Workspace.self) ?? []
         check("workspaces are saved", stored.contains { (x: Workspace) -> Bool in x.id == w.id && x.items.count == 1 })
 
         if let item = items.first {
@@ -793,6 +793,28 @@ enum SelfTest {
         await model.undoLast()
         check("undoing Delete Collection brings them back", model.bookmarkState.collections.count == 1
                 && model.bookmarkState.bookmarks.count == 2)
+
+        // Page details fetched after a save survive undoing to an older snapshot (here: the second save's).
+        model.saveLink("https://example.org/post")
+        model.saveLink("https://example.org/later")
+        if let saved = model.bookmarkState.bookmarks.first(where: { (b: Bookmark) -> Bool in b.url == "https://example.org/post" }) {
+            let meta = FetchedMeta(title: "The Real Title", image: nil, icon: nil)
+            model.fetchedMeta[saved.id] = meta // as `fillMeta` does when the page arrives
+            model.setBookmarks(Bookmarks.update(model.bookmarkState, saved.id) { (b: inout Bookmark) in meta.apply(to: &b) }, undo: nil)
+            await model.undoLast()
+            check("undo keeps a fetched title", model.bookmark(saved.id)?.title == "The Real Title"
+                    && !model.bookmarkState.bookmarks.contains { (b: Bookmark) -> Bool in b.url == "https://example.org/later" })
+        }
+        model.page = .bookmarks
+        let before: Int = model.bookmarkState.bookmarks.count
+        check("⌥⌘V on Bookmarks moves nothing", model.pasteOnPage(move: true) && model.bookmarkState.bookmarks.count == before)
+
+        var scratch = WorkspaceDraft()
+        scratch.name = "Scratch"
+        model.commitWorkspaceDraft(scratch)
+        await model.undoLast()
+        check("undoing New Workspace leaves its page", model.page == .browser
+                && !model.workspaces.contains { (x: Workspace) -> Bool in x.name == "Scratch" })
         model.page = .browser
     }
 

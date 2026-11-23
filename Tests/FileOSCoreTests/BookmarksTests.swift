@@ -110,4 +110,31 @@ final class BookmarksTests: XCTestCase {
         XCTAssertEqual(raw[0]["url"] as? String, "https://a.com/x")
         XCTAssertEqual(raw[0]["title"] as? String, "a.com")
     }
+
+    func testExtractMetaStaysFastOnHostileHTML() {
+        let hostile = String(repeating: "<title>", count: 8000) + String(repeating: "<meta content=x ", count: 8000)
+            + String(repeating: "<link rel=icon ", count: 8000) + String(repeating: "a", count: 900_000)
+        let start = Date()
+        let meta = Bookmarks.extractMeta(html: hostile, base: url("https://site.com/"))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.5)
+        XCTAssertNil(meta.icon)
+    }
+
+    func testExtractMetaClampsTheTitleAndReadsOnlyTheHead() {
+        let long = String(repeating: "word ", count: 200)
+        let html = "<head><title>\(long)</title></head><body><meta property=\"og:image\" content=\"/late.png\"></body>"
+        let meta = Bookmarks.extractMeta(html: html, base: url("https://site.com/"))
+        XCTAssertLessThanOrEqual(meta.title?.count ?? 0, 300)
+        XCTAssertNil(meta.image)
+    }
+
+    func testPublicHosts() {
+        for host in ["example.com", "8.8.8.8", "172.32.0.1", "[2606:4700::1]"] {
+            XCTAssertTrue(Bookmarks.isPublicHost(host), host)
+        }
+        for host in ["localhost", "a.localhost", "printer.local", "127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1",
+                     "169.254.169.254", "0.0.0.0", "100.64.0.1", "[::1]", "::1", "[fe80::1]", "fd00::2", "", "2130706433"] {
+            XCTAssertFalse(Bookmarks.isPublicHost(host), host)
+        }
+    }
 }

@@ -205,7 +205,7 @@ private struct EditMenuCommands: Commands {
 
     private func paste(move: Bool) {
         if !move, TextEditing.forward(TextEditing.paste) { return }
-        if !move, model.pasteOnPage() { return } // links on Bookmarks and workspaces (F11.2, F12.1)
+        if model.pasteOnPage(move: move) { return } // links on Bookmarks and workspaces (F11.2, F12.1)
         Task { await model.paste(move: move) }
     }
 

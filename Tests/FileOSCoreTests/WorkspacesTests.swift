@@ -57,10 +57,15 @@ final class WorkspacesTests: XCTestCase {
         let edited = Workspaces.edit(list, id, name: "Taxes", description: "d", color: "red")
         XCTAssertEqual(edited[0].name, "Taxes")
         XCTAssertEqual(edited[0].color, "red")
-        let previous = edited
-        let deleted = Workspaces.delete(edited, id)
+        let item = WorkspaceItem.file("/tmp/kept", isFolder: true)
+        let previous = Workspaces.add(edited, to: id, items: [item])
+        let deleted = Workspaces.delete(previous, id)
         XCTAssertTrue(deleted.isEmpty)
-        XCTAssertEqual(previous, edited) // undo = put the previous array back
+        // Undo puts the previous array back: the workspace, its fields and its items, all intact.
+        let undone = previous
+        XCTAssertEqual(undone.map(\.id), [id])
+        XCTAssertEqual(undone[0].name, "Taxes")
+        XCTAssertEqual(undone[0].items, [item])
     }
 
     func testSample() {

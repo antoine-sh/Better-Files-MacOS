@@ -22,28 +22,57 @@ struct WorkspaceDraft: Sendable {
     var link = ""
 }
 
+/// What a link's page said about itself.
+struct FetchedMeta: Sendable {
+    var title: String?
+    var image: String?
+    var icon: String?
+
+    /// Fills only what is still the placeholder (the site as title) or empty, never what the user typed.
+    func apply(to b: inout Bookmark) {
+        if b.title == b.site, let title { b.title = title }
+        if b.image == nil { b.image = image }
+        if b.icon == nil { b.icon = icon }
+    }
+}
+
 /// Fetches a saved link's page once for its title, picture and icon (F12.1). Off the main actor;
-/// http(s) only, 5 s, and at most 1 MB is read.
+/// http(s) to public hosts only (redirects included), 5 s, and at most 1 MB is read.
 enum LinkMeta {
     static let maxBytes = 1_000_000
 
-    static func fetch(_ url: URL) async -> (title: String?, image: String?, icon: String?)? {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+    static func allowed(_ url: URL?) -> Bool {
+        guard let url, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host else { return false }
+        return Bookmarks.isPublicHost(host)
+    }
+
+    /// Stops any redirect that leaves http(s) or heads into the local network.
+    private final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest) async -> URLRequest? {
+            LinkMeta.allowed(request.url) ? request : nil
+        }
+    }
+
+    static func fetch(_ url: URL) async -> FetchedMeta? {
+        guard allowed(url) else { return nil }
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 5
         config.timeoutIntervalForResource = 5
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         do {
-            let (bytes, response) = try await session.bytes(from: url)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+            let (bytes, response) = try await session.bytes(from: url, delegate: RedirectGuard())
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  allowed(response.url ?? url) else { return nil }
             var data = Data()
             for try await byte in bytes {
                 data.append(byte)
                 if data.count >= maxBytes { break } // the <head> is near the top; the rest isn't needed
             }
-            let base: URL = response.url ?? url
-            return Bookmarks.extractMeta(html: String(decoding: data, as: UTF8.self), base: base)
+            let meta = Bookmarks.extractMeta(html: String(decoding: data, as: UTF8.self), base: response.url ?? url)
+            return FetchedMeta(title: meta.title, image: meta.image, icon: meta.icon)
         } catch {
             return nil
         }
@@ -63,7 +92,9 @@ extension AppModel {
     func setWorkspaces(_ new: [Workspace], undo label: String?) {
         let previous: [Workspace] = workspaces
         workspaces = new
-        store.set("workspaces", new)
+        store.setArray("workspaces", new)
+        // e.g. undoing New Workspace while it's open: don't stay on a page for something that's gone
+        if case .workspace(let id) = page, workspace(id) == nil { page = .browser }
         guard let label else { return }
         undo.push(label) {
             await self.setWorkspaces(previous, undo: nil)
@@ -240,14 +271,15 @@ extension AppModel {
                                           isFolder: Self.isBrowsableFolder(url)), undo: "Locate")
     }
 
-    /// ⌘V on Bookmarks or a workspace; false elsewhere, so the files paste as usual.
-    func pasteOnPage() -> Bool {
+    /// ⌘V on Bookmarks or a workspace; false elsewhere, so the files paste as usual. ⌥⌘V (move) does nothing
+    /// on these pages: there is no folder on screen to move into.
+    func pasteOnPage(move: Bool = false) -> Bool {
         switch page {
         case .bookmarks:
-            saveCopiedLink()
+            if !move { saveCopiedLink() }
             return true
         case .workspace(let id):
-            pasteIntoWorkspace(id)
+            if !move { pasteIntoWorkspace(id) }
             return true
         default:
             return false
@@ -261,13 +293,22 @@ extension AppModel {
     func setBookmarks(_ new: BookmarkState, undo label: String?) {
         let previous: BookmarkState = bookmarkState
         bookmarkState = new
-        store.set("bookmarks", new.bookmarks)
-        store.set("bookmarkCollections", new.collections)
+        store.setArray("bookmarks", new.bookmarks)
+        store.setArray("bookmarkCollections", new.collections)
         guard let label else { return }
         undo.push(label) {
-            await self.setBookmarks(previous, undo: nil)
+            await self.restoreBookmarks(previous)
             return RestoreResult()
         }
+    }
+
+    /// Undo: the earlier snapshot, with any page details fetched since put back in.
+    private func restoreBookmarks(_ snapshot: BookmarkState) {
+        var state: BookmarkState = snapshot
+        for i in state.bookmarks.indices {
+            fetchedMeta[state.bookmarks[i].id]?.apply(to: &state.bookmarks[i])
+        }
+        setBookmarks(state, undo: nil)
     }
 
     var placeCollection: UUID? {
@@ -295,7 +336,7 @@ extension AppModel {
         }
         setBookmarks(next, undo: "Save Link")
         toast("Saved", undoable: true)
-        if fetchesLinkMeta { Task { await fillMeta(saved) } }
+        if fetchesLinkMeta, LinkMeta.allowed(url) { Task { await fillMeta(saved) } }
         return true
     }
 
@@ -313,12 +354,8 @@ extension AppModel {
     /// Reads the page once; the title only replaces the placeholder (the site), never one the user typed.
     func fillMeta(_ saved: Bookmark) async {
         guard let url = URL(string: saved.url), let meta = await LinkMeta.fetch(url) else { return }
-        let next: BookmarkState = Bookmarks.update(bookmarkState, saved.id) { (b: inout Bookmark) in
-            if b.title == b.site, let title = meta.title { b.title = title }
-            if b.image == nil { b.image = meta.image }
-            if b.icon == nil { b.icon = meta.icon }
-        }
-        setBookmarks(next, undo: nil)
+        fetchedMeta[saved.id] = meta
+        setBookmarks(Bookmarks.update(bookmarkState, saved.id) { (b: inout Bookmark) in meta.apply(to: &b) }, undo: nil)
     }
 
     func editBookmark(_ id: UUID, _ label: String, _ change: (inout Bookmark) -> Void) {

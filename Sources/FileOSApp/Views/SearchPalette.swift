@@ -79,12 +79,12 @@ final class SearchModel {
         func matches(_ s: String) -> Bool { s.range(of: q, options: .caseInsensitive) != nil }
         var out: [NamedMatch] = []
         if chip == .all || chip == .workspaces {
-            for w in store.get("workspaces", default: [Workspace]()) where !w.archived && matches(w.name) {
+            for w in (store.getArray("workspaces", of: Workspace.self) ?? []) where !w.archived && matches(w.name) {
                 out.append(NamedMatch(kind: .workspace, name: w.name, target: w.id.uuidString))
             }
         }
         if chip == .all || chip == .bookmarks {
-            for b in store.get("bookmarks", default: [Bookmark]()) where matches(b.title) || matches(b.url) || b.tags.contains(where: { (t: String) -> Bool in matches(t) }) {
+            for b in (store.getArray("bookmarks", of: Bookmark.self) ?? []) where matches(b.title) || matches(b.url) || b.tags.contains(where: { (t: String) -> Bool in matches(t) }) {
                 out.append(NamedMatch(kind: .bookmark, name: b.title, target: b.url))
             }
         }
@@ -114,7 +114,7 @@ extension AppModel {
             case .workspace:
                 if let id = UUID(uuidString: n.target) { page = .workspace(id) }
             case .bookmark:
-                if let url = URL(string: n.target) { _ = NSWorkspace.shared.open(url) }
+                if let url = Bookmarks.normalize(n.target) { _ = NSWorkspace.shared.open(url) } // http(s) only
             case .layout:
                 if let saved = savedLayouts.first(where: { (s: SavedLayout) -> Bool in s.name == n.target }) { applyLayout(saved) }
             }

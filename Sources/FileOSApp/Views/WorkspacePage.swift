@@ -31,6 +31,8 @@ struct WorkspacePage: View {
     @State private var importing = false
     @State private var addingLink = false
     @State private var linkText = ""
+    /// Each item's status and date, worked out off the main actor when the items change, not on every redraw.
+    @State private var facts: [UUID: ItemFacts] = [:]
 
     var body: some View {
         if let w = model.workspace(id) {
@@ -47,11 +49,12 @@ struct WorkspacePage: View {
             if w.archived { ArchivedBanner(workspace: w) }
             if !w.pinned.isEmpty { PinnedRow(workspace: w) }
             controls
-            WorkspaceItemsView(workspace: w, items: shown(w), layout: layout)
+            WorkspaceItemsView(workspace: w, items: shown(w), layout: layout, facts: facts)
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle(w.name)
+        .task(id: w.items) { await loadFacts(w.items) }
         .searchable(text: $query, placement: .toolbar, prompt: Text("Search in \(w.name)"))
         .toolbar { toolbar(w) }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item, .folder], allowsMultipleSelection: true) { (result: Result<[URL], Error>) in
@@ -108,15 +111,14 @@ struct WorkspacePage: View {
         }
         guard layout == .changed else { return items }
         // Changed Lately: most recently modified first; links (no date) last.
-        let dates: [UUID: Date] = Dictionary(uniqueKeysWithValues: items.map { (item: WorkspaceItem) -> (UUID, Date) in
-            (item.id, Self.modified(item) ?? .distantPast)
-        })
-        return items.sorted { (a: WorkspaceItem, b: WorkspaceItem) -> Bool in (dates[a.id] ?? .distantPast) > (dates[b.id] ?? .distantPast) }
+        func date(_ item: WorkspaceItem) -> Date { facts[item.id]?.modified ?? .distantPast }
+        return items.sorted { (a: WorkspaceItem, b: WorkspaceItem) -> Bool in date(a) > date(b) }
     }
 
-    static func modified(_ item: WorkspaceItem) -> Date? {
-        guard let path = item.path else { return nil }
-        return (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+    private func loadFacts(_ items: [WorkspaceItem]) async {
+        let task = Task.detached(priority: .userInitiated) { () -> [UUID: ItemFacts] in ItemFacts.of(items) }
+        let found: [UUID: ItemFacts] = await task.value
+        if !Task.isCancelled { facts = found }
     }
 
     private func imported(_ result: Result<[URL], Error>) {
@@ -238,6 +240,7 @@ private struct WorkspaceItemsView: View {
     let workspace: Workspace
     let items: [WorkspaceItem]
     let layout: WorkspaceLayout
+    let facts: [UUID: ItemFacts]
 
     var body: some View {
         if items.isEmpty {
@@ -252,17 +255,36 @@ private struct WorkspaceItemsView: View {
         switch layout {
         case .list, .changed:
             LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(items) { (item: WorkspaceItem) in ItemRow(workspace: workspace, item: item, showDate: layout == .changed) }
+                ForEach(items) { (item: WorkspaceItem) in ItemRow(workspace: workspace, item: item, fact: facts[item.id], showDate: layout == .changed) }
             }
         case .tiles:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 12)], spacing: 12) {
-                ForEach(items) { (item: WorkspaceItem) in ItemTile(workspace: workspace, item: item) }
+                ForEach(items) { (item: WorkspaceItem) in ItemTile(workspace: workspace, item: item, fact: facts[item.id]) }
             }
         case .cards:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
-                ForEach(items) { (item: WorkspaceItem) in ItemCard(workspace: workspace, item: item) }
+                ForEach(items) { (item: WorkspaceItem) in ItemCard(workspace: workspace, item: item, fact: facts[item.id]) }
             }
         }
+    }
+}
+
+/// What the page shows about an item that needs the disk: missing or not, and when it last changed.
+struct ItemFacts: Sendable {
+    let status: ItemStatus
+    let modified: Date?
+
+    static func of(_ items: [WorkspaceItem]) -> [UUID: ItemFacts] {
+        var out: [UUID: ItemFacts] = [:]
+        for item in items {
+            let status: ItemStatus = Workspaces.status(of: item, fileExists: { (p: String) -> Bool in FileManager.default.fileExists(atPath: p) },
+                                                       volumeMounted: { (p: String) -> Bool in FileManager.default.fileExists(atPath: p) })
+            let modified: Date? = item.path.flatMap { (p: String) -> Date? in
+                (try? URL(fileURLWithPath: p).resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            }
+            out[item.id] = ItemFacts(status: status, modified: modified)
+        }
+        return out
     }
 }
 
@@ -283,10 +305,11 @@ private struct ItemIcon: View {
 private struct ItemProblem: View {
     let workspace: Workspace
     let item: WorkspaceItem
+    let fact: ItemFacts?
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        if let text = model.itemStatus(item).text {
+        if let text = fact?.status.text {
             HStack(spacing: 6) {
                 Text(text).font(.caption).foregroundStyle(.orange)
                 Button("Locate…", action: { model.locate(workspace.id, item) }).controlSize(.small)
@@ -298,6 +321,7 @@ private struct ItemProblem: View {
 private struct ItemRow: View {
     let workspace: Workspace
     let item: WorkspaceItem
+    let fact: ItemFacts?
     let showDate: Bool
     @Environment(AppModel.self) private var model
 
@@ -309,9 +333,9 @@ private struct ItemRow: View {
                 Text(place).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             if item.pinned { Image(systemName: "pin.fill").foregroundStyle(.secondary).accessibilityLabel("Pinned") }
-            ItemProblem(workspace: workspace, item: item)
+            ItemProblem(workspace: workspace, item: item, fact: fact)
             Spacer()
-            if showDate, let date = WorkspacePage.modified(item) {
+            if showDate, let date = fact?.modified {
                 Text(date, style: .relative).font(.caption).foregroundStyle(.secondary)
             }
             ItemMenu(workspace: workspace, item: item)
@@ -329,12 +353,13 @@ private struct ItemRow: View {
 private struct ItemTile: View {
     let workspace: Workspace
     let item: WorkspaceItem
+    let fact: ItemFacts?
 
     var body: some View {
         VStack(spacing: 6) {
             ItemIcon(item: item, side: 48)
             Text(item.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
-            ItemProblem(workspace: workspace, item: item)
+            ItemProblem(workspace: workspace, item: item, fact: fact)
         }
         .frame(maxWidth: .infinity)
         .padding(8)
@@ -346,6 +371,7 @@ private struct ItemTile: View {
 private struct ItemCard: View {
     let workspace: Workspace
     let item: WorkspaceItem
+    let fact: ItemFacts?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -356,7 +382,7 @@ private struct ItemCard: View {
             }
             Text(item.name).font(.headline).lineLimit(1)
             Text(item.path ?? item.url ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2).truncationMode(.middle)
-            ItemProblem(workspace: workspace, item: item)
+            ItemProblem(workspace: workspace, item: item, fact: fact)
         }
         .padding(12)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))

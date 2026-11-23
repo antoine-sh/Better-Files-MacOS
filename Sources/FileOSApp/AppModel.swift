@@ -111,6 +111,8 @@ final class AppModel {
     var showDeleteCollection = false
     /// Off for the self-test: CI must not depend on the network.
     var fetchesLinkMeta = true
+    /// What each link's page said, so undoing to an older snapshot doesn't lose it.
+    @ObservationIgnored var fetchedMeta: [UUID: FetchedMeta] = [:]
 
     /// Path bar edit mode (⌘L / ⇧⌘G) and the last "no folder called …" result.
     var editingPath = false
@@ -147,13 +149,14 @@ final class AppModel {
         symbolOverrides = store.get(Self.symbolsKey, default: [String: String]())
         colorOverrides = store.get(Self.colorsKey, default: [String: String]())
         savedLayouts = store.get("layouts", default: [SavedLayout]())
-        // First launch: the sample "Acme Project" (F11.5). An empty saved list stays empty.
-        let savedWorkspaces: [Workspace]? = store.get("workspaces", default: [Workspace]?.none)
+        // Element by element, so one damaged entry can't cost the rest. The sample "Acme Project" (F11.5) is
+        // seeded only when nothing was ever saved; an empty saved list stays empty.
+        let savedWorkspaces: [Workspace]? = store.getArray("workspaces", of: Workspace.self)
         let initialWorkspaces: [Workspace] = savedWorkspaces ?? [Workspaces.sample(home: FileOps.canonical(home))]
         workspaces = initialWorkspaces
-        if savedWorkspaces == nil { store.set("workspaces", initialWorkspaces) }
-        bookmarkState = BookmarkState(bookmarks: store.get("bookmarks", default: [Bookmark]()),
-                                      collections: store.get("bookmarkCollections", default: [BookmarkCollection]()))
+        if savedWorkspaces == nil { store.setArray("workspaces", initialWorkspaces) }
+        bookmarkState = BookmarkState(bookmarks: store.getArray("bookmarks", of: Bookmark.self) ?? [],
+                                      collections: store.getArray("bookmarkCollections", of: BookmarkCollection.self) ?? [])
         let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: home.appendingPathComponent("Downloads"))
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
