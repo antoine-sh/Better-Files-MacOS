@@ -335,9 +335,11 @@ enum SelfTest {
         model.page = .browser
         model.setLayout(.one)
         model.pane.navigate(to: docs)
+        let oneTables: Int = tableCount(model) // includes the sidebar's outline view
         model.toggleDualPane()
         r.append(("⌘D makes two panes", model.panes.count == 2 && model.layout == .sideBySide))
-        r.append(("two panes build two tables", tableCount(model) == 2))
+        let twoTables: Int = tableCount(model)
+        r.append(("two panes build two tables", twoTables == oneTables + 1))
         let left: PaneModel = model.panes[0]
         let right: PaneModel = model.panes[1]
         model.switchPane()
@@ -354,7 +356,7 @@ enum SelfTest {
         model.swapPanes()
         r.append(("⌘U swaps the panes", model.panes[0] === right && model.pane === left))
         model.setLayout(.four)
-        r.append(("⌥⌘6 makes four panes", model.panes.count == 4 && tableCount(model) == 4))
+        r.append(("⌥⌘6 makes four panes", model.panes.count == 4 && tableCount(model) == twoTables + 2))
         model.saveLayout(named: "Month end")
         r.append(("saved layout listed first", model.savedLayouts.first?.name == "Month end"))
         let reopened = AppModel(home: model.home, trashDir: model.trashDir)
