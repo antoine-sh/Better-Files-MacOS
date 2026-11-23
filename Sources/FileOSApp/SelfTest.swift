@@ -342,8 +342,16 @@ enum SelfTest {
         r.append(("two panes build two tables", twoTables == oneTables + 1))
         let left: PaneModel = model.panes[0]
         let right: PaneModel = model.panes[1]
-        model.switchPane()
-        r.append(("Tab switches the active pane", model.pane === right))
+        let tab: NSEvent? = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                             context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+                                             isARepeat: false, keyCode: 48)
+        let tabHandled: Bool = tab.map { (e: NSEvent) -> Bool in model.handlePaneKey(e) } ?? false
+        r.append(("Tab switches the active pane", tabHandled && model.pane === right))
+        let shiftTab: NSEvent? = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.shift], timestamp: 0,
+                                                  windowNumber: 0, context: nil, characters: "\t",
+                                                  charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48)
+        let shiftHandled: Bool = shiftTab.map { (e: NSEvent) -> Bool in model.handlePaneKey(e) } ?? true
+        r.append(("⇧Tab is left alone", !shiftHandled && model.pane === right))
         right.navigate(to: other)
         model.activate(left)
         left.selection = [aTxt.path]
@@ -351,6 +359,10 @@ enum SelfTest {
         let copied: URL = other.appendingPathComponent("a.txt")
         r.append(("F5 copies a file to the other pane", exists(copied) && exists(aTxt)))
         r.append(("F5 toast", hasToast(model, "Copied 1 item to “Other”")))
+        r.append(("F5 keeps the active pane", model.activePane == 0 && right.selection.isEmpty))
+        r.append(("a drag from one pane to the other is across panes", model.isAcrossPanes([aTxt], to: other)))
+        let sub: URL = docs.appendingPathComponent("Projects")
+        r.append(("a drag within a pane is not", !model.isAcrossPanes([aTxt], to: sub)))
         await model.undoLast()
         r.append(("F5 copy is undoable", !exists(copied)))
         model.swapPanes()
@@ -406,6 +418,19 @@ enum SelfTest {
                     && !exists(docs.appendingPathComponent("a 2.txt"))))
         r.append(("a cancelled waiting transfer never runs", !secondDone && !exists(spare.appendingPathComponent("a.txt"))))
         r.append(("queue is idle afterwards", queue.running == nil && queue.waiting.isEmpty))
+        // A sheet dismissed by the system answers Stop instead of stranding the transfer.
+        model.showSearch = true
+        let third = Task { await model.runTransfer([clashing], to: docs, mode: .copy) }
+        var reasked = false
+        for _ in 0..<100 where !reasked {
+            try? await Task.sleep(for: .milliseconds(20))
+            reasked = model.clashPrompt != nil
+        }
+        r.append(("a clash closes ⌘K so its sheet can show", reasked && !model.showSearch))
+        queue.showClash = false
+        queue.clashSheetDismissed()
+        let thirdDone: Bool = await third.value
+        r.append(("dismissing the clash sheet stops the transfer", reasked && !thirdDone && model.clashPrompt == nil))
         let detail: String = TransferQueue.detail(bytesDone: 1_200_000_000, bytesTotal: 3_400_000_000, itemsDone: 12, itemsTotal: 40)
         r.append(("progress text", detail == "1.2 GB of 3.4 GB · 12 of 40 items"))
         return r

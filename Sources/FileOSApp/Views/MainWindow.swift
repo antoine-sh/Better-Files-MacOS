@@ -13,6 +13,7 @@ struct MainWindow: View {
         }
         .overlay(alignment: .bottom) { ToastsView() }
         .overlay(alignment: .bottomTrailing) { TransferQueueView(queue: model.transfers) }
+        .overlay { SearchOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
     }
 
@@ -177,11 +178,8 @@ struct FileDialogs: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .sheet(item: $queue.clashPrompt) { (prompt: ClashPrompt) in
-                ClashDialog(prompt: prompt).environment(model)
-            }
-            .sheet(isPresented: $model.showSearch) {
-                SearchPalette(search: model.search).environment(model)
+            .sheet(isPresented: $queue.showClash, onDismiss: { queue.clashSheetDismissed() }) {
+                ClashSheet(queue: queue).environment(model)
             }
             .alert("Save Layout", isPresented: $model.showSaveLayout) {
                 TextField("Name", text: $layoutName)
@@ -213,6 +211,15 @@ struct FileDialogs: ViewModifier {
     private var extensionTitle: String { model.extensionPrompt.map { (p: ExtensionPrompt) -> String in AppModel.extensionTitle(p) } ?? "" }
     private var keepTitle: String { "Keep \(model.extensionPrompt?.from ?? "")" }
     private var useTitle: String { "Use \(model.extensionPrompt?.to ?? "")" }
+}
+
+/// The clash question, if one is still open when the sheet builds.
+private struct ClashSheet: View {
+    let queue: TransferQueue
+
+    var body: some View {
+        if let prompt = queue.clashPrompt { ClashDialog(prompt: prompt) }
+    }
 }
 
 /// Icon-only toolbar button with the accessibility label and tooltip it needs.

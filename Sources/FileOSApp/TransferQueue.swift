@@ -17,7 +17,11 @@ final class TransferQueue {
 
     private(set) var running: Job?
     private(set) var waiting: [Job] = []
-    var clashPrompt: ClashPrompt?
+    private(set) var clashPrompt: ClashPrompt?
+    /// Drives the clash sheet. SwiftUI may set it false (a dismissal); `clashSheetDismissed` then answers Stop.
+    var showClash = false
+    /// Called just before a clash question shows, so other modal UI (⌘K) can step aside.
+    @ObservationIgnored var willAsk: (@MainActor () -> Void)?
     let trashDir: URL?
     @ObservationIgnored private var tail: Task<Void, Never>?
     @ObservationIgnored private var tasks: [UUID: Task<Result<TransferResult, Error>?, Never>] = [:]
@@ -81,9 +85,12 @@ final class TransferQueue {
             if let earlier = clashPrompt { earlier.continuation.resume(returning: (.stop, false)) }
             if Task.isCancelled {
                 clashPrompt = nil
+                showClash = false
                 c.resume(returning: (.stop, false))
             } else {
+                willAsk?()
                 clashPrompt = ClashPrompt(clash: clash, continuation: c)
+                showClash = true
             }
         }
         return (answer.0, applyToAll: answer.1)
@@ -92,7 +99,13 @@ final class TransferQueue {
     func answerClash(_ choice: ClashChoice, all: Bool) {
         guard let prompt = clashPrompt else { return }
         clashPrompt = nil
+        showClash = false
         prompt.continuation.resume(returning: (choice, all))
+    }
+
+    /// The sheet went away without an answer (not replaced by a new question): Stop, never strand the transfer.
+    func clashSheetDismissed() {
+        if !showClash { answerClash(.stop, all: false) }
     }
 
     // MARK: Copy

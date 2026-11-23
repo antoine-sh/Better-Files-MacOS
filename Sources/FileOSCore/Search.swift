@@ -49,10 +49,17 @@ private func isFlaggedHidden(_ url: URL) -> Bool {
     #endif
 }
 
-/// The first line containing `query` (1-based), for UTF-8 text files of at most 2 MB.
-private func matchingLine(_ url: URL, size: Int64, query: String) -> (number: Int, text: String)? {
-    guard size <= maxContentBytes, let data = try? Data(contentsOf: url), !data.contains(0),
-          let text = String(data: data, encoding: .utf8) else { return nil }
+/// The first line containing `query` (1-based), for regular UTF-8 files of at most 2 MB. Links, FIFOs and
+/// devices are never opened (a FIFO read blocks forever), and at most 2 MB + 1 byte is ever read.
+private func matchingLine(_ url: URL, query: String) -> (number: Int, text: String)? {
+    // attributesOfItem does not follow a final symlink, so this is the item itself.
+    guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+          attrs[.type] as? FileAttributeType == .typeRegular,
+          ((attrs[.size] as? NSNumber)?.int64Value ?? 0) <= Int64(maxContentBytes),
+          let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+    defer { try? handle.close() }
+    guard let data = try? handle.read(upToCount: maxContentBytes + 1), data.count <= maxContentBytes,
+          !data.contains(0), let text = String(data: data, encoding: .utf8) else { return nil }
     var number = 0
     for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
         number += 1
@@ -86,9 +93,10 @@ public func search(roots: [URL], query: String, contents: Bool = false, chip: Se
             guard chip.admits(isDirectory: entry.isDirectory, kind: entry.kind) else { continue }
             let nameMatches = entry.name.range(of: needle, options: .caseInsensitive) != nil
             var line: (number: Int, text: String)?
-            if contents, !entry.isDirectory, entry.kind == .documents || entry.kind == .other {
+            if contents, !entry.isDirectory, !entry.isSymlink, entry.kind == .documents || entry.kind == .other {
+                if isCancelled() { return [] } // each file read can take a while
                 // shortcut: PDFs need PDFKit for their text; only plain-text files are read here
-                line = matchingLine(entry.url, size: entry.size, query: needle)
+                line = matchingLine(entry.url, query: needle)
             }
             guard nameMatches || line != nil else { continue }
             hits.append(SearchHit(url: entry.url, name: entry.name, isDirectory: entry.isDirectory, kind: entry.kind, line: line))

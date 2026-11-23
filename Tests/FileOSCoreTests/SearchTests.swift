@@ -38,6 +38,27 @@ final class SearchTests: XCTestCase {
         XCTAssertTrue(search(roots: [root], query: "needle", contents: true).isEmpty)
     }
 
+    func testContentsReadsOnlyRegularFilesNotLinksOrFifos() throws {
+        let root = makeTempDir()
+        let target = touch(makeTempDir(), "real.txt", "the needle")
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link.txt"), withDestinationURL: target)
+        XCTAssertEqual(mkfifo(root.appendingPathComponent("pipe.txt").path, 0o644), 0)
+        touch(root, "plain.txt", "a needle here")
+        let start = Date()
+        let hits = search(roots: [root], query: "needle", contents: true)
+        XCTAssertEqual(hits.map(\.name), ["plain.txt"]) // a FIFO read would block forever
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
+    func testContentsChecksCancellationPerEntry() {
+        let root = makeTempDir()
+        for i in 0..<5 { touch(root, "f\(i).txt", "needle") }
+        let calls = CallCounter()
+        let hits = search(roots: [root], query: "needle", contents: true, isCancelled: { calls.next() > 2 })
+        XCTAssertTrue(hits.isEmpty)
+        XCTAssertLessThan(calls.value, 6)
+    }
+
     func testSymlinkLoopTerminatesAndIsNotFollowed() throws {
         let root = makeTempDir()
         touch(root, "a/target.txt")
@@ -94,4 +115,11 @@ final class SearchTests: XCTestCase {
         XCTAssertNotEqual(a, c)
         XCTAssertEqual(Set([a, b, c]).count, 2)
     }
+}
+
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    var value: Int { lock.withLock { n } }
+    func next() -> Int { lock.withLock { n += 1; return n } }
 }

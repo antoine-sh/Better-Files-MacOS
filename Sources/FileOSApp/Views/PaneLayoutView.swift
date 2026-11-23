@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import FileOSCore
 
 /// F8.3: up to four panes. The raw value is the ⌥⌘ number.
@@ -23,23 +24,6 @@ struct SavedLayout: Codable, Hashable, Identifiable, Sendable {
 // MARK: - Panes (F8.1–F8.3)
 
 extension AppModel {
-    func setLayout(_ new: PaneLayout) {
-        page = .browser
-        let from: PaneModel = pane
-        if activePane >= new.paneCount { // keep the pane the user is in
-            panes.swapAt(0, activePane)
-            activePane = 0
-        }
-        if panes.count > new.paneCount { panes.removeLast(panes.count - new.paneCount) }
-        while panes.count < new.paneCount {
-            let added = PaneModel(url: from.url, showHidden: showHidden, store: store)
-            added.view = from.view
-            panes.append(added)
-        }
-        layout = new
-        editingPath = false
-    }
-
     /// ⌘D.
     func toggleDualPane() { setLayout(panes.count > 1 ? .one : .sideBySide) }
 
@@ -49,6 +33,27 @@ extension AppModel {
         activePane = index
         editingPath = false
         pathError = nil
+    }
+
+    /// Tab with no modifiers (F8.1), seen by a local key monitor because list tables keep Tab for themselves.
+    /// Left alone while typing in a field, in ⌘K, renaming, or in a sheet.
+    func handlePaneKey(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.keyCode == 48 else { return false } // kVK_Tab
+        let mods: NSEvent.ModifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+        guard mods.isEmpty, panes.count > 1, page == .browser, !showSearch, !editingPath, !showBatchRename,
+              clashPrompt == nil, pane.renaming == nil, !TextEditing.isActive,
+              !(event.window?.firstResponder is NSText), event.window?.sheetParent == nil else { return false }
+        switchPane()
+        return true
+    }
+
+    func installPaneKeyMonitor() {
+        guard paneKeyMonitor == nil else { return }
+        paneKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] (event: NSEvent) -> NSEvent? in
+            guard let self else { return event }
+            return self.handlePaneKey(event) ? nil : event
+        }
     }
 
     /// Tab.
@@ -102,19 +107,25 @@ extension AppModel {
         toast("Saved layout “\(name)”", undoable: true)
     }
 
-    func setSavedLayouts(_ list: [SavedLayout]) {
-        savedLayouts = list
-        store.set("layouts", list)
-    }
 }
 
 // MARK: - Views
 
-/// The panes of the current layout; the active one is underlined (F8.1).
+/// The panes of the current layout; the active one is underlined (F8.1) and has keyboard focus.
 struct PaneLayoutView: View {
     @Environment(AppModel.self) private var model
+    @FocusState private var focused: Int?
 
     var body: some View {
+        layout
+            .onAppear { model.installPaneKeyMonitor() }
+            .onChange(of: model.activePane) { focused = model.activePane }
+            .onChange(of: focused) { (_: Int?, now: Int?) in
+                if let now, now < model.panes.count { model.activate(model.panes[now]) }
+            }
+    }
+
+    @ViewBuilder private var layout: some View {
         switch model.layout {
         case .one: cell(0)
         case .sideBySide: HStack(spacing: 0) { cell(0); Divider(); cell(1) }
@@ -136,7 +147,7 @@ struct PaneLayoutView: View {
     @ViewBuilder private func cell(_ index: Int) -> some View {
         if index < model.panes.count {
             let pane: PaneModel = model.panes[index]
-            PaneView(pane: pane).id(ObjectIdentifier(pane))
+            PaneView(pane: pane, index: index, focus: $focused).id(ObjectIdentifier(pane))
         }
     }
 }
@@ -144,6 +155,8 @@ struct PaneLayoutView: View {
 /// One pane: path bar, files, the transfer bar and status bar.
 struct PaneView: View {
     @Bindable var pane: PaneModel
+    let index: Int
+    var focus: FocusState<Int?>.Binding
     @Environment(AppModel.self) private var model
 
     private var isActive: Bool { model.pane === pane }
@@ -154,6 +167,7 @@ struct PaneView: View {
             PathBarView(pane: pane)
             underline
             content.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .focused(focus, equals: index)
             TransferButtons(pane: pane)
             Divider()
             StatusBar(pane: pane)
@@ -163,7 +177,6 @@ struct PaneView: View {
         .onChange(of: pane.selection) { (old: Set<String>, new: Set<String>) in
             if !new.isSubset(of: old) { activate() } // a reload only shrinks the selection
         }
-        .onKeyPress(.tab) { switchPane() }
     }
 
     @ViewBuilder private var underline: some View {
@@ -175,12 +188,6 @@ struct PaneView: View {
     }
 
     private func activate() { model.activate(pane) }
-
-    private func switchPane() -> KeyPress.Result {
-        guard several, !model.editingPath, pane.renaming == nil else { return .ignored }
-        model.switchPane()
-        return .handled
-    }
 
     @ViewBuilder private var content: some View {
         switch FolderState(error: pane.error) {

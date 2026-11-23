@@ -63,8 +63,9 @@ final class AppModel {
     /// The layout's panes (1–4, F8.3); menus and keys act on `pane`, the active one.
     var panes: [PaneModel]
     var activePane = 0
-    var layout: PaneLayout = .one // set through setLayout (PaneLayoutView.swift)
-    var savedLayouts: [SavedLayout] // set through setSavedLayouts, which persists it
+    private(set) var layout: PaneLayout = .one
+    private(set) var savedLayouts: [SavedLayout]
+    @ObservationIgnored var paneKeyMonitor: Any?
     private(set) var showHidden: Bool
     var page: Page = .browser
     private(set) var toasts: [Toast] = []
@@ -103,6 +104,8 @@ final class AppModel {
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
         refreshVolumes()
+        // A clash question must be answerable: close ⌘K so the sheet can show.
+        transfers.willAsk = { [weak self] in self?.showSearch = false }
     }
 
     var pane: PaneModel { panes[activePane] }
@@ -284,6 +287,32 @@ struct ExtensionPrompt {
     let to: String
 }
 
+// MARK: - Layout state (F8.3): the only writers of `layout` and `savedLayouts`.
+
+extension AppModel {
+    func setLayout(_ new: PaneLayout) {
+        page = .browser
+        let from: PaneModel = pane
+        if activePane >= new.paneCount { // keep the pane the user is in
+            panes.swapAt(0, activePane)
+            activePane = 0
+        }
+        if panes.count > new.paneCount { panes.removeLast(panes.count - new.paneCount) }
+        while panes.count < new.paneCount {
+            let added = PaneModel(url: from.url, showHidden: showHidden, store: store)
+            added.view = from.view
+            panes.append(added)
+        }
+        layout = new
+        editingPath = false
+    }
+
+    func setSavedLayouts(_ list: [SavedLayout]) {
+        savedLayouts = list
+        store.set("layouts", list)
+    }
+}
+
 // MARK: - File operations (F5). Every change goes through FileOSCore, registers an undo and shows a toast.
 
 extension AppModel {
@@ -411,10 +440,22 @@ extension AppModel {
     /// F5.3: same disk moves, another disk copies, ⌥ always copies. F8.2: from a pane always moves.
     func drop(_ urls: [URL], into folder: URL) async {
         guard let first = urls.first else { return }
-        let shown: Set<URL> = Set(panes.flatMap { (p: PaneModel) -> [URL] in p.columnDirs })
-        let fromPane: Bool = urls.allSatisfy { (u: URL) -> Bool in shown.contains(FileOps.canonical(u.deletingLastPathComponent())) }
-        let copy: Bool = NSEvent.modifierFlags.contains(.option) || (!fromPane && !Self.sameVolume(first, folder))
+        let copy: Bool = NSEvent.modifierFlags.contains(.option)
+            || (!isAcrossPanes(urls, to: folder) && !Self.sameVolume(first, folder))
         _ = await runTransfer(urls, to: folder, mode: copy ? .copy : .move)
+    }
+
+    /// The pane showing `folder` (in any of its columns), if any.
+    func paneIndex(showing folder: URL) -> Int? {
+        let f: URL = FileOps.canonical(folder)
+        return panes.firstIndex { (p: PaneModel) -> Bool in p.columnDirs.contains(f) }
+    }
+
+    /// F8.2: the items come from one pane and land in a folder shown in a different pane.
+    func isAcrossPanes(_ urls: [URL], to folder: URL) -> Bool {
+        guard let first = urls.first, let to = paneIndex(showing: folder),
+              let from = paneIndex(showing: first.deletingLastPathComponent()), from != to else { return false }
+        return urls.allSatisfy { (u: URL) -> Bool in paneIndex(showing: u.deletingLastPathComponent()) == from }
     }
 
     static func sameVolume(_ a: URL, _ b: URL) -> Bool {
@@ -440,8 +481,9 @@ extension AppModel {
                 let verb: String = mode == .move ? "Moved" : "Copied"
                 toast("\(verb) \(Self.items(done)) to “\(dest.lastPathComponent)”", undoable: true)
                 let made: Set<String> = Set(result.results.map { (r: (from: URL, to: URL, action: TransferResult.Action)) -> String in r.to.path })
-                for p in panes where FileOps.canonical(dest) == p.currentFolder || FileOps.canonical(dest) == p.url {
-                    p.selection = made
+                // Only in the active pane: selecting in another pane would make it active (F5 twice must not copy back).
+                if FileOps.canonical(dest) == pane.currentFolder || FileOps.canonical(dest) == pane.url {
+                    pane.selection = made
                 }
             }
             if let failure = result.failure { fail(failure) }
