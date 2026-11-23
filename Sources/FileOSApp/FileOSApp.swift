@@ -15,62 +15,6 @@ struct FileOSApp: App {
     }
 }
 
-struct FileOSCommands: Commands {
-    let model: AppModel
-
-    var body: some Commands {
-        CommandGroup(after: .sidebar) {
-            Button(hiddenTitle, action: { toggleHidden() })
-                .keyboardShortcut(".", modifiers: [.command, .shift])
-        }
-        CommandMenu("Go") {
-            Button("Back", action: { back() })
-                .keyboardShortcut("[", modifiers: .command)
-                .disabled(!model.pane.canGoBack)
-            Button("Forward", action: { forward() })
-                .keyboardShortcut("]", modifiers: .command)
-                .disabled(!model.pane.canGoForward)
-            Button("Enclosing Folder", action: { up() })
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(!model.pane.canGoUp)
-            Button("Open", action: { openSelection() })
-                .keyboardShortcut(.downArrow, modifiers: .command)
-            Divider()
-            Button("Go to Folder…", action: { editPath() })
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("Type a Path", action: { editPath() })
-                .keyboardShortcut("l", modifiers: .command)
-        }
-    }
-
-    private var hiddenTitle: String { model.showHidden ? "Hide Hidden Files" : "Show Hidden Files" }
-    private func toggleHidden() { model.toggleHidden() }
-    private func back() {
-        model.page = .browser
-        model.pane.back()
-    }
-
-    private func forward() {
-        model.page = .browser
-        model.pane.forward()
-    }
-
-    private func openSelection() {
-        model.page = .browser
-        model.openSelection()
-    }
-
-    private func up() {
-        model.page = .browser
-        model.pane.up()
-    }
-
-    private func editPath() {
-        model.page = .browser
-        model.editingPath = true
-    }
-}
-
 @main @MainActor
 enum AppMain {
     static func main() {

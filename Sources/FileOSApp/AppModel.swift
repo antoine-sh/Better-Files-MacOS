@@ -38,6 +38,23 @@ final class AppModel {
     let home: URL
     let store: Store
     let undo = UndoStack()
+    /// nil: the system Trash. Set for the self-test so nothing lands in the real Trash.
+    let trashDir: URL?
+    /// Action id → shortcut, with the user's overrides (F17 Settings > Shortcuts writes "shortcuts").
+    let shortcuts: [String: KeyCombo]
+    private(set) var iconSize: IconSize
+    private(set) var showPreview: Bool
+    var filterShown = false
+    private(set) var clipboard: Clipboard?
+
+    // Dialogs (see FileDialogs)
+    var clashPrompt: ClashPrompt?
+    var extensionPrompt: ExtensionPrompt?
+    var showExtensionAlert = false
+    var showEmptyTrashAlert = false
+    private(set) var emptyTrashSummary: (count: Int, bytes: Int64) = (0, 0)
+    var showBatchRename = false
+    private(set) var batchRenameTargets: [URL] = []
     var panes: [PaneModel]
     var activePane = 0
     private(set) var showHidden: Bool
@@ -59,14 +76,21 @@ final class AppModel {
         URL(fileURLWithPath: ProcessInfo.processInfo.environment["FILEOS_HOME"] ?? NSHomeDirectory())
     }
 
-    init(home: URL) {
+    init(home: URL, trashDir: URL? = nil) {
         self.home = FileOps.canonical(home)
-        store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
+        self.trashDir = trashDir
+        let store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
+        self.store = store
         let hidden = store.get("showHidden", default: false)
         showHidden = hidden
         favorites = store.get("favorites", default: [String]()).map { (p: String) -> URL in FileOps.canonical(URL(fileURLWithPath: p)) }
         collapsedSections = Set(store.get("sidebar.collapsed", default: [String]()))
-        panes = [PaneModel(url: home, showHidden: hidden)]
+        shortcuts = Shortcuts.merged(store.get("shortcuts", default: [String: KeyCombo]()))
+        iconSize = store.get("view.size", default: IconSize.medium)
+        showPreview = store.get("view.preview", default: false)
+        let pane = PaneModel(url: home, showHidden: hidden, store: store)
+        pane.view = store.get("view.mode", default: ViewMode.list)
+        panes = [pane]
         refreshVolumes()
     }
 
@@ -78,7 +102,7 @@ final class AppModel {
         }
     }
 
-    var trashURL: URL { FileOps.canonical(home.appendingPathComponent(".Trash")) }
+    var trashURL: URL { FileOps.canonical(trashDir ?? home.appendingPathComponent(".Trash")) }
 
     // MARK: Navigation
 
@@ -90,13 +114,19 @@ final class AppModel {
 
     /// ⌘↓ / double-click: folders open in place, files open in their default app.
     func openSelection(_ ids: Set<Entry.ID>? = nil) {
-        let ids = ids ?? pane.selection
-        let chosen = pane.entries.filter { ids.contains($0.id) }
-        if chosen.count == 1, let folder = chosen.first, folder.isDirectory {
-            pane.navigate(to: folder.url)
+        let urls: [URL] = (ids ?? pane.selection).sorted().map { (p: String) -> URL in URL(fileURLWithPath: p) }
+        if urls.count == 1, let folder = urls.first, Self.isBrowsableFolder(folder) {
+            page = .browser
+            pane.navigate(to: folder)
             return
         }
-        for entry in chosen { _ = NSWorkspace.shared.open(entry.url) }
+        for url in urls { _ = NSWorkspace.shared.open(url) }
+    }
+
+    /// A folder, but not a package such as an .app (those open instead).
+    nonisolated static func isBrowsableFolder(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return values?.isDirectory == true && values?.isPackage != true
     }
 
     func displayName(_ url: URL) -> String {
@@ -148,11 +178,7 @@ final class AppModel {
             toast("Couldn't create “\(missing.name)”: \(error.localizedDescription)", undoable: false)
             return
         }
-        undo.push("New Folder") {
-            // Undo goes through the Trash, so anything put in the folder since is still recoverable.
-            do { _ = try FileOps.trash([url], trashDir: nil); return RestoreResult(restored: [url]) }
-            catch { return RestoreResult(failed: [(url, error.localizedDescription)]) }
-        }
+        undoByTrashing("New Folder", [url])
         open(url) // also clears pathError
         editingPath = false
         toast("Created “\(missing.name)”", undoable: true)
@@ -218,10 +244,412 @@ final class AppModel {
     }
 
     func performUndo() {
-        Task {
-            guard let result = await undo.undo()?.result else { return }
-            for p in panes { p.reload() }
-            if !result.failed.isEmpty { toast(Self.restoreFailureText(result), undoable: false) }
+        Task { await undoLast() }
+    }
+
+    func undoLast() async {
+        guard let result = await undo.undo()?.result else { return }
+        reloadAll()
+        if !result.failed.isEmpty { toast(Self.restoreFailureText(result), undoable: false) }
+    }
+
+    func reloadAll() { for p in panes { p.reload() } }
+
+    static func items(_ n: Int) -> String { n == 1 ? "1 item" : "\(n) items" }
+}
+
+/// A name clash waiting for the user's answer (F5.4). Answered exactly once, by `answerClash`.
+struct ClashPrompt: Identifiable {
+    let id = UUID()
+    let clash: Clash
+    let continuation: CheckedContinuation<(ClashChoice, Bool), Never>
+}
+
+/// A rename that changes the extension, waiting for "Keep .pdf" / "Use .docx" (F5.6).
+struct ExtensionPrompt {
+    let url: URL
+    let newName: String
+    let from: String
+    let to: String
+}
+
+// MARK: - File operations (F5). Every change goes through FileOSCore, registers an undo and shows a toast.
+
+extension AppModel {
+    /// The selection, or nothing.
+    var targets: [URL] { pane.selectedURLs }
+
+    /// Undo for something we created: send it to the Trash, so anything put in it since stays recoverable.
+    func undoByTrashing(_ label: String, _ urls: [URL]) {
+        let trashDir: URL? = self.trashDir
+        undo.push(label) {
+            var result = RestoreResult()
+            for url in urls {
+                do {
+                    _ = try FileOps.trash([url], trashDir: trashDir)
+                    result.restored.append(url)
+                } catch {
+                    result.failed.append((url, error.localizedDescription))
+                }
+            }
+            return result
         }
+    }
+
+    private func fail(_ error: Error) { toast(error.localizedDescription, undoable: false) }
+
+    private func select(_ urls: [URL]) {
+        pane.selection = Set(urls.map { (u: URL) -> String in u.path })
+    }
+
+    /// ⇧⌘N / F7: "untitled folder", then rename it (F5.8).
+    func newFolder() {
+        page = .browser
+        do {
+            let url: URL = try FileOps.newFolder(in: pane.currentFolder)
+            undoByTrashing("New Folder", [url])
+            reloadAll()
+            select([url])
+            pane.renaming = url.path
+            toast("Created “\(url.lastPathComponent)”", undoable: true)
+        } catch {
+            fail(error)
+        }
+    }
+
+    /// ⌘⌫ / F8 (F5.9).
+    func trash(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        do {
+            let moves: [Move] = try FileOps.trash(urls, trashDir: trashDir)
+            undo.push("Move to Trash") { FileOps.restore(moves) }
+            reloadAll()
+            toast("Moved \(Self.items(moves.count)) to the Trash", undoable: true)
+        } catch {
+            // shortcut: no "Move with Finder" fallback yet; add it when Finder automation is allowed
+            toast("Couldn't move to the Trash: \(error.localizedDescription)", undoable: false)
+        }
+    }
+
+    /// F5.2: "report copy.pdf".
+    func duplicate(_ urls: [URL]) {
+        made(urls, label: "Duplicate", verb: "Duplicated") { (u: URL) throws -> URL in try FileOps.duplicate(u) }
+    }
+
+    /// ⌃⌘A (F5.2).
+    func makeAlias(_ urls: [URL]) {
+        made(urls, label: "Make Alias", verb: "Made aliases of") { (u: URL) throws -> URL in try FileOps.makeAlias(u) }
+    }
+
+    private func made(_ urls: [URL], label: String, verb: String, _ make: (URL) throws -> URL) {
+        var made: [URL] = []
+        for url in urls {
+            do { made.append(try make(url)) } catch { fail(error); break }
+        }
+        guard !made.isEmpty else { return }
+        undoByTrashing(label, made)
+        reloadAll()
+        select(made)
+        toast("\(verb) \(Self.items(made.count))", undoable: true)
+    }
+
+    // MARK: Clipboard (F5.1)
+
+    func copy(_ urls: [URL], cut: Bool = false) {
+        guard !urls.isEmpty else { return }
+        let count: Int = Pasteboard.write(urls)
+        clipboard = Clipboard(urls: urls, cut: cut, changeCount: count)
+    }
+
+    /// Esc: the cut items stop being dimmed and won't move on paste.
+    func cancelCut() {
+        if clipboard?.cut == true { clipboard?.cut = false }
+    }
+
+    func isCut(_ id: String) -> Bool {
+        guard let clipboard, clipboard.cut, clipboard.changeCount == Pasteboard.changeCount else { return false }
+        return clipboard.urls.contains { (u: URL) -> Bool in u.path == id }
+    }
+
+    /// ⌘V copies (or moves what was cut); ⌥⌘V moves (F5.1). Files copied in other apps paste too.
+    func paste(into folder: URL? = nil, move forceMove: Bool = false) async {
+        let dest: URL = folder ?? pane.currentFolder
+        var sources: [URL]
+        var mode: TransferMode = .copy
+        if let clipboard, clipboard.changeCount == Pasteboard.changeCount {
+            sources = clipboard.urls
+            if clipboard.cut { mode = .move }
+        } else {
+            sources = Pasteboard.fileURLs()
+        }
+        if forceMove { mode = .move }
+        guard !sources.isEmpty else { return }
+        let finished: Bool = await runTransfer(sources, to: dest, mode: mode)
+        if mode == .move, finished { clipboard = nil }
+    }
+
+    /// F5.3: same disk moves, another disk copies, ⌥ always copies.
+    func drop(_ urls: [URL], into folder: URL) async {
+        guard let first = urls.first else { return }
+        let copy: Bool = NSEvent.modifierFlags.contains(.option) || !Self.sameVolume(first, folder)
+        _ = await runTransfer(urls, to: folder, mode: copy ? .copy : .move)
+    }
+
+    static func sameVolume(_ a: URL, _ b: URL) -> Bool {
+        let key: Set<URLResourceKey> = [.volumeIdentifierKey]
+        guard let x = (try? a.resourceValues(forKeys: key))?.volumeIdentifier as? NSObject,
+              let y = (try? b.resourceValues(forKeys: key))?.volumeIdentifier as? NSObject else { return true }
+        return x.isEqual(y)
+    }
+
+    /// Runs one transfer, asking about clashes; true when every item was handled.
+    @discardableResult
+    func runTransfer(_ sources: [URL], to dest: URL, mode: TransferMode) async -> Bool {
+        // shortcut: no progress UI or queue yet (Task 6's TransferQueue); big copies just take a while
+        do {
+            let result: TransferResult = try await transfer(sources, to: dest, mode: mode, trashDir: trashDir,
+                                                            resolve: { (clash: Clash) async -> (ClashChoice, applyToAll: Bool) in
+                await self.askClash(clash)
+            })
+            reloadAll()
+            let done: Int = result.results.count
+            if done > 0 {
+                undo.push(mode == .move ? "Move" : "Copy", result.undo)
+                let verb: String = mode == .move ? "Moved" : "Copied"
+                toast("\(verb) \(Self.items(done)) to “\(dest.lastPathComponent)”", undoable: true)
+                if FileOps.canonical(dest) == pane.currentFolder || FileOps.canonical(dest) == pane.url {
+                    select(result.results.map { (r: (from: URL, to: URL, action: TransferResult.Action)) -> URL in r.to })
+                }
+            }
+            if let failure = result.failure { fail(failure) }
+            return result.failure == nil && !result.stopped
+        } catch {
+            fail(error)
+            return false
+        }
+    }
+
+    func askClash(_ clash: Clash) async -> (ClashChoice, applyToAll: Bool) {
+        let answer: (ClashChoice, Bool) = await withCheckedContinuation { (c: CheckedContinuation<(ClashChoice, Bool), Never>) in
+            clashPrompt = ClashPrompt(clash: clash, continuation: c)
+        }
+        return (answer.0, applyToAll: answer.1)
+    }
+
+    func answerClash(_ choice: ClashChoice, all: Bool) {
+        guard let prompt = clashPrompt else { return }
+        clashPrompt = nil
+        prompt.continuation.resume(returning: (choice, all))
+    }
+
+    // MARK: Rename (F5.6, F5.7)
+
+    /// Return / F2: one item renames inline, several open the batch sheet.
+    func beginRename(_ urls: [URL]? = nil) {
+        let urls: [URL] = urls ?? targets
+        if urls.count == 1, let url = urls.first {
+            pane.renaming = url.path
+        } else if urls.count > 1 {
+            batchRenameTargets = urls
+            showBatchRename = true
+        }
+    }
+
+    func cancelRename() { pane.renaming = nil }
+
+    func commitRename(_ url: URL, to newName: String) {
+        guard pane.renaming == url.path else { return } // already committed (Return, then focus loss)
+        pane.renaming = nil
+        let old: String = url.lastPathComponent
+        guard newName != old else { return }
+        if let problem = Rename.validate(newName) {
+            toast(problem, undoable: false)
+            return
+        }
+        // shortcut: only asks when both names have an extension; adding or removing one renames directly
+        if let change = Rename.extensionChange(from: old, to: newName), !change.from.isEmpty, !change.to.isEmpty {
+            extensionPrompt = ExtensionPrompt(url: url, newName: newName, from: change.from, to: change.to)
+            showExtensionAlert = true
+            return
+        }
+        performRename(url, to: newName)
+    }
+
+    func resolveExtension(keep: Bool) {
+        guard let prompt = extensionPrompt else { return }
+        extensionPrompt = nil
+        let name: String = keep ? splitExtension(prompt.newName).base + prompt.from : prompt.newName
+        performRename(prompt.url, to: name)
+    }
+
+    static func extensionTitle(_ p: ExtensionPrompt) -> String {
+        "Are you sure you want to change the extension from “\(p.from)” to “\(p.to)”?"
+    }
+
+    func performRename(_ url: URL, to name: String) {
+        do {
+            let renamed: URL = try FileOps.rename(url, to: name)
+            let oldName: String = url.lastPathComponent
+            undo.push("Rename") {
+                do {
+                    _ = try FileOps.rename(renamed, to: oldName)
+                    return RestoreResult(restored: [url])
+                } catch {
+                    return RestoreResult(failed: [(url, error.localizedDescription)])
+                }
+            }
+            reloadAll()
+            select([renamed])
+            toast("Renamed “\(oldName)” to “\(renamed.lastPathComponent)”", undoable: true)
+        } catch {
+            fail(error)
+        }
+    }
+
+    func applyBatchRename(_ rows: [Rename.BatchRow], in dir: URL) {
+        let outcome = Rename.apply(rows, in: dir)
+        if outcome.renamed > 0 {
+            undo.push("Rename", outcome.undo)
+            toast("Renamed \(Self.items(outcome.renamed))", undoable: true)
+        }
+        if let first = outcome.failed.first {
+            toast("Couldn't rename “\(first.0)”: \(first.1)", undoable: false)
+        }
+        reloadAll()
+    }
+
+    // MARK: Trash (F5.10)
+
+    func askEmptyTrash() {
+        let summary: (count: Int, bytes: Int64) = FileOps.trashSummary(trashURL)
+        guard summary.count > 0 else {
+            toast("The Trash is empty", undoable: false)
+            return
+        }
+        emptyTrashSummary = summary
+        showEmptyTrashAlert = true
+    }
+
+    static func emptyTrashMessage(count: Int, bytes: Int64) -> String {
+        "\(items(count)) (\(formatBytes(bytes))) will be deleted for good. This can't be undone."
+    }
+
+    /// Only ever called from the "Empty the Trash?" alert: the one permanent delete.
+    func emptyTrash() {
+        do {
+            let done: (count: Int, bytes: Int64) = try FileOps.emptyTrash(trashURL)
+            toast("Deleted \(Self.items(done.count)) for good", undoable: false)
+        } catch {
+            fail(error)
+        }
+        reloadAll()
+    }
+
+    // MARK: Misc (F5.13, F4)
+
+    /// ⌥⌘C: the selected items' paths, one per line, or the folder's.
+    func copyPath(_ urls: [URL]) {
+        let list: [URL] = urls.isEmpty ? [pane.currentFolder] : urls
+        Pasteboard.write(list.map { (u: URL) -> String in u.path }.joined(separator: "\n"))
+        clipboard = nil
+        toast(list.count == 1 ? "Copied the path of “\(list[0].lastPathComponent)”" : "Copied \(list.count) paths",
+              undoable: false)
+    }
+
+    /// ⌘R.
+    func showInFinder(_ urls: [URL]) {
+        NSWorkspace.shared.activateFileViewerSelecting(urls.isEmpty ? [pane.currentFolder] : urls)
+    }
+
+    /// ⌃⌘T: selected folders, or the open folder, join the sidebar's Favorites.
+    func addToSidebar(_ urls: [URL]) {
+        let folders: [URL] = (urls.isEmpty ? [pane.url] : urls.filter { (u: URL) -> Bool in Self.isBrowsableFolder(u) }).map { (u: URL) -> URL in FileOps.canonical(u) }
+        let added: [URL] = folders.filter { (u: URL) -> Bool in !favorites.contains(u) && !standardFavorites.contains(u) }
+        guard !added.isEmpty else { return }
+        favorites += added
+        store.set("favorites", favorites.map { (u: URL) -> String in u.path })
+        undo.push("Add to Sidebar") {
+            await self.removeFavorites(added)
+            return RestoreResult(restored: added)
+        }
+        toast("Added \(Self.items(added.count)) to the sidebar", undoable: true)
+    }
+
+    func removeFavorites(_ urls: [URL]) {
+        favorites.removeAll { (u: URL) -> Bool in urls.contains(u) }
+        store.set("favorites", favorites.map { (u: URL) -> String in u.path })
+    }
+
+    func canAirDrop(_ urls: [URL]) -> Bool {
+        !urls.isEmpty && !urls.contains { (u: URL) -> Bool in isDownloading(u.lastPathComponent) }
+    }
+
+    /// ⇧⌘R (F5.13).
+    func airDrop(_ urls: [URL]) {
+        guard canAirDrop(urls), let service = NSSharingService(named: .sendViaAirDrop) else { return }
+        service.perform(withItems: urls)
+    }
+
+    /// ⌥⇧⌘T / ⌥⇧⌘E / F4: the first installed terminal or editor, on the selection or the folder.
+    func openIn(kind: ExternalApp.Kind) {
+        let target: URL = OpenIn.target(kind: kind, selection: targets, cwd: pane.currentFolder)
+        if let app = OpenIn.apps.first(where: { (a: ExternalApp) -> Bool in a.kind == kind && Self.applicationURL(named: a.bundleName) != nil }) {
+            openIn(appID: app.id, target: target)
+        } else if kind == .editor, let textEdit = Self.applicationURL(named: "TextEdit") {
+            NSWorkspace.shared.open([target], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration(),
+                                    completionHandler: nil)
+        } else {
+            toast("No \(kind == .terminal ? "terminal" : "editor") app is installed", undoable: false)
+        }
+    }
+
+    /// Go menu places (F18).
+    func goTo(_ place: String) {
+        let url: URL
+        switch place {
+        case "Applications": url = URL(fileURLWithPath: "/Applications")
+        case "iCloud Drive": url = home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
+        case "Home": url = home
+        default: url = home.appendingPathComponent(place)
+        }
+        open(url)
+    }
+
+    // MARK: View (F3.1–F3.4, F3.11)
+
+    func setView(_ mode: ViewMode) {
+        page = .browser
+        pane.view = mode
+        store.set("view.mode", mode)
+    }
+
+    func resize(by step: Int) {
+        guard let size = IconSize(rawValue: iconSize.rawValue + step) else { return }
+        iconSize = size
+        store.set("view.size", size)
+    }
+
+    func togglePreview() {
+        showPreview.toggle()
+        store.set("view.preview", showPreview)
+    }
+
+    func setGroup(_ grouping: Grouping) {
+        var prefs: FolderPrefs = pane.prefs
+        prefs.group = grouping
+        pane.setPrefs(prefs)
+    }
+
+    /// Choosing the current key again flips the direction.
+    func setSort(_ key: SortKey) {
+        var prefs: FolderPrefs = pane.prefs
+        if prefs.sortKey == key { prefs.ascending.toggle() } else { prefs.sortKey = key; prefs.ascending = true }
+        pane.setPrefs(prefs)
+    }
+
+    func toggleFilesFirst() {
+        var prefs: FolderPrefs = pane.prefs
+        prefs.filesFirst.toggle()
+        pane.setPrefs(prefs)
     }
 }

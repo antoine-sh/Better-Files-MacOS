@@ -12,7 +12,7 @@ enum SelfTest {
         let docs = home.appendingPathComponent("Documents")
         try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         try? "a".write(to: docs.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
-        return AppModel(home: home)
+        return AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
     }
 
     static func run(model: AppModel) async -> Bool {
@@ -134,9 +134,157 @@ enum SelfTest {
         check("browser builds a split view", browserViews.contains { (v: NSView) -> Bool in v is NSSplitView })
         check("browser builds the list table", browserViews.contains { (v: NSView) -> Bool in v is NSTableView })
 
+        for (name, passed) in await fileChecks(model) { check(name, passed) }
+        for (name, passed) in viewChecks(model) { check(name, passed) }
+
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
         return ok
+    }
+
+    private static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    private static func hasToast(_ model: AppModel, _ text: String) -> Bool {
+        model.toasts.contains { (t: Toast) -> Bool in t.text == text && t.undoable }
+    }
+
+    /// F5: new folder, rename, trash + undo, clipboard, clashes, duplicate, batch rename.
+    static func fileChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let home: URL = model.home
+        let docs: URL = home.appendingPathComponent("Documents")
+        let aTxt: URL = docs.appendingPathComponent("a.txt")
+        let pane: PaneModel = model.pane
+        model.page = .browser
+        model.setView(.list)
+        pane.navigate(to: docs)
+
+        model.newFolder()
+        let untitled: URL = docs.appendingPathComponent("untitled folder")
+        r.append(("new folder is “untitled folder”", exists(untitled)))
+        r.append(("new folder starts its rename", pane.renaming == untitled.path))
+        r.append(("new folder is undoable", hasToast(model, "Created “untitled folder”")))
+        model.commitRename(untitled, to: "Projects")
+        let projects: URL = docs.appendingPathComponent("Projects")
+        r.append(("inline rename renames", exists(projects) && !exists(untitled)))
+        r.append(("rename rejects a colon", { () -> Bool in
+            pane.renaming = projects.path
+            model.commitRename(projects, to: "a:b")
+            return exists(projects)
+        }()))
+
+        let report: URL = docs.appendingPathComponent("report.pdf")
+        try? "pdf".write(to: report, atomically: true, encoding: .utf8)
+        pane.reload()
+        pane.renaming = report.path
+        model.commitRename(report, to: "summary.docx")
+        r.append(("extension change asks first", model.showExtensionAlert && model.extensionPrompt?.from == ".pdf"))
+        r.append(("nothing renamed before the answer", exists(report)))
+        model.showExtensionAlert = false
+        model.resolveExtension(keep: true)
+        r.append(("Keep .pdf keeps the extension", exists(docs.appendingPathComponent("summary.pdf"))))
+
+        pane.selection = [aTxt.path]
+        model.trash(model.targets)
+        r.append(("trash moves the item", !exists(aTxt)))
+        r.append(("trash toast", hasToast(model, "Moved 1 item to the Trash")))
+        await model.undoLast()
+        r.append(("undo restores the trashed item", exists(aTxt)))
+
+        pane.selection = [aTxt.path]
+        model.copy(model.targets)
+        pane.navigate(to: home)
+        await model.paste()
+        let pasted: URL = home.appendingPathComponent("a.txt")
+        r.append(("paste copies via the clipboard", exists(pasted) && exists(aTxt)))
+        r.append(("paste toast", hasToast(model, "Copied 1 item to “\(home.lastPathComponent)”")))
+        r.append(("pasted item is selected", pane.selection == Set([pasted.path])))
+
+        // The same name in Documents now clashes.
+        model.copy([pasted])
+        pane.navigate(to: docs)
+        let pasting = Task { await model.paste() }
+        var asked = false
+        for _ in 0..<100 where !asked {
+            try? await Task.sleep(for: .milliseconds(20))
+            asked = model.clashPrompt != nil
+        }
+        let title: String = model.clashPrompt.map { (p: ClashPrompt) -> String in ClashDialog.title(p.clash) } ?? ""
+        r.append(("a clash asks", title == "“a.txt” is already in “Documents”"))
+        model.answerClash(.keepBoth, all: false)
+        await pasting.value
+        r.append(("Keep Both makes “a 2.txt”", exists(docs.appendingPathComponent("a 2.txt"))))
+        await model.undoLast()
+        r.append(("undo removes the kept copy", !exists(docs.appendingPathComponent("a 2.txt"))))
+
+        model.copy([aTxt], cut: true)
+        r.append(("cut items are dimmed", model.isCut(aTxt.path)))
+        model.cancelCut()
+        r.append(("Esc cancels a cut", !model.isCut(aTxt.path)))
+
+        model.duplicate([aTxt])
+        r.append(("duplicate makes “a copy.txt”", exists(docs.appendingPathComponent("a copy.txt"))))
+
+        for name in ["x1.txt", "x2.txt"] {
+            try? name.write(to: docs.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let present: Set<String> = Set((try? FileManager.default.contentsOfDirectory(atPath: docs.path)) ?? [])
+        let rows: [Rename.BatchRow] = Rename.plan(["x1.txt", "x2.txt"], rule: .number(name: "Lisbon", start: 1), existing: present)
+        model.applyBatchRename(rows, in: docs)
+        r.append(("batch rename applies the plan", exists(docs.appendingPathComponent("Lisbon 01.txt"))
+                    && exists(docs.appendingPathComponent("Lisbon 02.txt"))))
+        r.append(("batch rename toast", hasToast(model, "Renamed 2 items")))
+        await model.undoLast()
+        r.append(("undo reverts the batch rename", exists(docs.appendingPathComponent("x1.txt"))))
+
+        let expected: String = "12 items (1.9 GB) will be deleted for good. This can't be undone."
+        r.append(("Empty Trash copy", AppModel.emptyTrashMessage(count: 12, bytes: 1_900_000_000) == expected))
+        return r
+    }
+
+    /// F3: view modes, sort and group persisted per folder, shortcuts in menus.
+    static func viewChecks(_ model: AppModel) -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let docs: URL = model.home.appendingPathComponent("Documents")
+        let pane: PaneModel = model.pane
+        model.page = .browser
+        pane.navigate(to: docs)
+        model.setView(.list)
+        let listTables: Int = tableCount(model)
+        model.setView(.icons)
+        r.append(("icons view replaces the table", pane.view == .icons && tableCount(model) < listTables))
+        model.setView(.columns)
+        r.append(("columns view replaces the table", pane.view == .columns && tableCount(model) < listTables))
+        let reopenedView: ViewMode = AppModel(home: model.home, trashDir: model.trashDir).pane.view
+        r.append(("view mode persisted", reopenedView == .columns))
+        model.setView(.list)
+
+        model.setGroup(.kind)
+        model.setSort(.size)
+        model.toggleFilesFirst()
+        r.append(("files first puts files before folders", pane.visibleEntries.first?.isDirectory == false))
+        r.append(("grouping by kind makes sections", pane.sections.map { (s: RowSection) -> String in s.title } == ["Folders", "PDFs", "Documents"]))
+        r.append(("grouped list still builds a table", tableCount(model) == listTables))
+        let reopened = AppModel(home: model.home, trashDir: model.trashDir)
+        reopened.pane.navigate(to: docs)
+        let prefs: FolderPrefs = reopened.pane.prefs
+        r.append(("group and sort persisted per folder", prefs == FolderPrefs(sortKey: .size, filesFirst: true, group: .kind)))
+        reopened.pane.navigate(to: model.home)
+        r.append(("other folders keep the default sort", reopened.pane.prefs == FolderPrefs()))
+        pane.sort = [PaneModel.comparator(.modified, ascending: false)]
+        pane.tableSortChanged()
+        r.append(("column click sets the folder sort", pane.prefs.sortKey == .modified && !pane.prefs.ascending))
+        model.setGroup(.none)
+
+        let newFolder: KeyboardShortcut? = model.shortcuts["newFolder"]?.menuShortcut
+        r.append(("⇧⌘N is New Folder", newFolder == KeyboardShortcut("n", modifiers: [.command, .shift])))
+        r.append(("F7 is a menu shortcut", model.shortcuts["newFolderF7"]?.menuShortcut != nil))
+        r.append(("Return is left to the file views", model.shortcuts["rename"]?.menuShortcut == nil))
+        return r
+    }
+
+    private static func tableCount(_ model: AppModel) -> Int {
+        hostedViews(model).filter { (v: NSView) -> Bool in v is NSTableView }.count
     }
 
     /// Hosts MainWindow in a borderless window that is never ordered front, lays it out,
