@@ -52,24 +52,24 @@ public struct RestoreResult: Sendable {
 // Outside FileOps so the C rename(2) isn't shadowed by FileOps.rename.
 private func posixRename(_ from: String, _ to: String) -> Int32 { rename(from, to) }
 
-private let fm = FileManager.default
 
-private func exists(_ url: URL) -> Bool { (try? fm.attributesOfItem(atPath: url.path)) != nil }
+private func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
 
 /// Maps Cocoa/POSIX permission and missing-file errors to FileOSError; other errors pass through.
 private func mapped(_ error: Error, _ url: URL) -> Error {
     if error is FileOSError { return error }
     let ns = error as NSError
     let posix = (ns.userInfo[NSUnderlyingErrorKey] as? NSError)?.code ?? (ns.domain == NSPOSIXErrorDomain ? ns.code : 0)
-    if ns.domain == NSCocoaErrorDomain, [NSFileReadNoPermissionError, NSFileWriteNoPermissionError].contains(ns.code)
+    let cocoa = ns.domain == NSCocoaErrorDomain
+    if (cocoa && [NSFileReadNoPermissionError, NSFileWriteNoPermissionError].contains(ns.code))
         || posix == Int(EACCES) || posix == Int(EPERM) { return FileOSError.accessDenied(url.path) }
-    if ns.domain == NSCocoaErrorDomain, [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(ns.code)
+    if (cocoa && [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(ns.code))
         || posix == Int(ENOENT) { return FileOSError.notFound(url.path) }
     return error
 }
 
 private func sameInode(_ a: URL, _ b: URL) -> Bool {
-    guard let x = try? fm.attributesOfItem(atPath: a.path), let y = try? fm.attributesOfItem(atPath: b.path),
+    guard let x = try? FileManager.default.attributesOfItem(atPath: a.path), let y = try? FileManager.default.attributesOfItem(atPath: b.path),
           let xi = x[.systemFileNumber] as? UInt, let yi = y[.systemFileNumber] as? UInt,
           let xd = x[.systemNumber] as? Int, let yd = y[.systemNumber] as? Int else { return false }
     return xi == yi && xd == yd
@@ -78,16 +78,16 @@ private func sameInode(_ a: URL, _ b: URL) -> Bool {
 public enum FileOps {
     public static func listDirectory(_ dir: URL, showHidden: Bool = false) throws -> [Entry] {
         let names: [String]
-        do { names = try fm.contentsOfDirectory(atPath: dir.path) } catch { throw mapped(error, dir) }
+        do { names = try FileManager.default.contentsOfDirectory(atPath: dir.path) } catch { throw mapped(error, dir) }
         var out: [Entry] = []
         for name in names {
             let hidden = name.hasPrefix(".")
             if hidden && !showHidden { continue }
             let url = dir.appendingPathComponent(name)
-            guard let link = try? fm.attributesOfItem(atPath: url.path) else { continue } // vanished
+            guard let link = try? FileManager.default.attributesOfItem(atPath: url.path) else { continue } // vanished
             let isLink = link[.type] as? FileAttributeType == .typeSymbolicLink
             // Describe the target for symlinks; a broken link describes itself.
-            let attrs = isLink ? ((try? fm.attributesOfItem(atPath: url.resolvingSymlinksInPath().path)) ?? link) : link
+            let attrs = isLink ? ((try? FileManager.default.attributesOfItem(atPath: url.resolvingSymlinksInPath().path)) ?? link) : link
             let isDir = attrs[.type] as? FileAttributeType == .typeDirectory
             let created = attrs[.creationDate] as? Date ?? .distantPast
             out.append(Entry(
@@ -111,7 +111,7 @@ public enum FileOps {
 
     public static func newFolder(in dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(uniqueName(in: dir, for: "untitled folder"))
-        do { try fm.createDirectory(at: url, withIntermediateDirectories: false) } catch { throw mapped(error, dir) }
+        do { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false) } catch { throw mapped(error, dir) }
         return url
     }
 
@@ -119,7 +119,7 @@ public enum FileOps {
         let dir = url.deletingLastPathComponent()
         let (base, ext) = splitExtension(url.lastPathComponent)
         let to = dir.appendingPathComponent(uniqueName(in: dir, for: "\(base) copy\(ext)"))
-        do { try fm.copyItem(at: url, to: to) } catch { throw mapped(error, url) }
+        do { try FileManager.default.copyItem(at: url, to: to) } catch { throw mapped(error, url) }
         return to
     }
 
@@ -132,7 +132,7 @@ public enum FileOps {
             let data = try url.bookmarkData(options: .suitableForBookmarkFile)
             try URL.writeBookmarkData(data, to: to)
             #else
-            try fm.createSymbolicLink(at: to, withDestinationURL: url)
+            try FileManager.default.createSymbolicLink(at: to, withDestinationURL: url)
             #endif
         } catch { throw mapped(error, url) }
         return to
@@ -156,17 +156,19 @@ public enum FileOps {
 
     public static func trash(_ urls: [URL], trashDir: URL?) throws -> [Move] {
         var moves: [Move] = []
+        var current = urls.first ?? URL(fileURLWithPath: "/")
         do {
             for from in urls {
+                current = from
                 if let trashDir {
-                    try fm.createDirectory(at: trashDir, withIntermediateDirectories: true)
+                    try FileManager.default.createDirectory(at: trashDir, withIntermediateDirectories: true)
                     let to = trashDir.appendingPathComponent(uniqueName(in: trashDir, for: from.lastPathComponent))
                     try move(from, to: to)
                     moves.append(Move(from: from, to: to))
                 } else {
                     #if os(macOS)
                     var result: NSURL?
-                    try fm.trashItem(at: from, resultingItemURL: &result)
+                    try FileManager.default.trashItem(at: from, resultingItemURL: &result)
                     moves.append(Move(from: from, to: (result as URL?) ?? from))
                     #else
                     throw FileOSError.notFound("Trash") // no system Trash on Linux: callers pass trashDir
@@ -175,7 +177,7 @@ public enum FileOps {
             }
         } catch {
             _ = restore(moves) // don't leave a half-trashed selection the caller can't undo
-            throw mapped(error, urls.first ?? URL(fileURLWithPath: "/"))
+            throw mapped(error, current)
         }
         return moves
     }
@@ -188,7 +190,7 @@ public enum FileOps {
                 continue
             }
             do {
-                try fm.createDirectory(at: m.from.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: m.from.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try move(m.to, to: m.from)
                 result.restored.append(m.from)
             } catch {
@@ -204,16 +206,16 @@ public enum FileOps {
         if posixRename(from.path, to.path) == 0 { return }
         let code = errno
         guard code == EXDEV else { throw mapped(NSError(domain: NSPOSIXErrorDomain, code: Int(code)), from) }
-        try fm.copyItem(at: from, to: to)
-        try fm.removeItem(at: from)
+        try FileManager.default.copyItem(at: from, to: to)
+        try FileManager.default.removeItem(at: from)
     }
 
     public static func emptyTrash(_ trashDir: URL) throws -> (count: Int, bytes: Int64) {
         var count = 0, bytes: Int64 = 0
-        for name in try fm.contentsOfDirectory(atPath: trashDir.path) {
+        for name in try FileManager.default.contentsOfDirectory(atPath: trashDir.path) {
             let url = trashDir.appendingPathComponent(name)
             guard let size = itemSize(url) else { continue } // vanished
-            try fm.removeItem(at: url)
+            try FileManager.default.removeItem(at: url)
             count += 1; bytes += size
         }
         return (count, bytes)
@@ -221,7 +223,7 @@ public enum FileOps {
 
     public static func trashSummary(_ trashDir: URL) -> (count: Int, bytes: Int64) {
         var count = 0, bytes: Int64 = 0
-        for name in (try? fm.contentsOfDirectory(atPath: trashDir.path)) ?? [] {
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: trashDir.path)) ?? [] {
             guard let size = itemSize(trashDir.appendingPathComponent(name)) else { continue }
             count += 1; bytes += size
         }
@@ -230,7 +232,7 @@ public enum FileOps {
 
     /// nil when the item no longer exists.
     private static func itemSize(_ url: URL) -> Int64? {
-        guard let a = try? fm.attributesOfItem(atPath: url.path) else { return nil }
+        guard let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
         switch a[.type] as? FileAttributeType {
         case .typeDirectory: return directorySize(url).bytes
         case .typeSymbolicLink: return 0
@@ -243,12 +245,12 @@ public enum FileOps {
         var bytes: Int64 = 0, items = 0
         var stack = [dir]
         while let d = stack.popLast(), items < maxEntries {
-            guard let names = try? fm.contentsOfDirectory(atPath: d.path) else { continue }
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: d.path) else { continue }
             for name in names {
                 if items >= maxEntries { break }
                 items += 1
                 let url = d.appendingPathComponent(name)
-                guard let a = try? fm.attributesOfItem(atPath: url.path) else { continue }
+                guard let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { continue }
                 switch a[.type] as? FileAttributeType {
                 case .typeDirectory: stack.append(url)
                 case .typeSymbolicLink: break
@@ -260,7 +262,7 @@ public enum FileOps {
     }
 
     public static func diskInfo(for url: URL) -> (total: Int64, free: Int64) {
-        let a = try? fm.attributesOfFileSystem(forPath: url.path)
+        let a = try? FileManager.default.attributesOfFileSystem(forPath: url.path)
         return ((a?[.systemSize] as? NSNumber)?.int64Value ?? 0, (a?[.systemFreeSize] as? NSNumber)?.int64Value ?? 0)
     }
 }

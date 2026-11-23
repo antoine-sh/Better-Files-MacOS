@@ -49,6 +49,6 @@ public func formatBytes(_ n: Int64) -> String {
     var v = Double(n)
     var i = -1
     let units = ["KB", "MB", "GB", "TB"]
-    repeat { v /= 1000; i += 1 } while v >= 1000 && i < units.count - 1
+    repeat { v /= 1000; i += 1 } while (v >= 1000 || (v * 10).rounded() >= 10_000) && i < units.count - 1
     return String(format: "%.1f %@", v, units[i])
 }

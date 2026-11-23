@@ -36,5 +36,6 @@ final class KindsTests: XCTestCase {
         XCTAssertEqual(formatBytes(999), "999 bytes")
         XCTAssertEqual(formatBytes(1200), "1.2 KB")
         XCTAssertEqual(formatBytes(1_200_000_000), "1.2 GB")
+        XCTAssertEqual(formatBytes(999_950), "1.0 MB")
     }
 }

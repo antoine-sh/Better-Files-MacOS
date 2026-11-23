@@ -84,6 +84,20 @@ final class FileOpsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: a.path))
     }
 
+    func testRenameMissingIsNotFound() {
+        let missing = dir.appendingPathComponent("nope.txt")
+        XCTAssertThrowsError(try FileOps.rename(missing, to: "x.txt")) { XCTAssertEqual($0 as? FileOSError, .notFound(missing.path)) }
+    }
+
+    func testRenameInReadOnlyDirIsAccessDenied() throws {
+        try XCTSkipIf(getuid() == 0, "root bypasses permissions")
+        let f = touch(dir, "ro/a.txt")
+        let ro = dir.appendingPathComponent("ro")
+        chmod(ro.path, 0o555)
+        defer { chmod(ro.path, 0o755) }
+        XCTAssertThrowsError(try FileOps.rename(f, to: "b.txt")) { XCTAssertEqual($0 as? FileOSError, .accessDenied(f.path)) }
+    }
+
     func testRenameHardLinkNotSilentlyAccepted() throws {
         // Same inode but different name (not case-only) must still be a clash, not a no-op.
         let a = touch(dir, "a.txt")
@@ -148,7 +162,7 @@ final class FileOpsTests: XCTestCase {
         XCTAssertEqual(FileOps.trashSummary(trash).count, 0)
     }
 
-    func testTrashSummaryExcludesVanishedEntries() throws {
+    func testTrashSummaryCountsDanglingSymlink() throws {
         let trash = dir.appendingPathComponent("Trash")
         touch(trash, "a.txt")
         // A dangling symlink still counts (lstat succeeds); a name that disappears does not.
