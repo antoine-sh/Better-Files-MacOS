@@ -15,11 +15,11 @@ struct LockedFolderView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text(FolderState.lockedTitle(folder)).font(.title2.weight(.semibold))
-            Button("Give FileOS Full Access", action: openFullDiskAccess)
+            Button("Give FileOS Full Access", action: { openFullDiskAccess() })
                 .buttonStyle(.borderedProminent)
             HStack {
-                Button("Allow Just This Folder…", action: allowJustThisFolder)
-                Button("Try Again", action: tryAgain)
+                Button("Allow Just This Folder…", action: { allowJustThisFolder() })
+                Button("Try Again", action: { tryAgain() })
             }
         }
         .padding(40)
@@ -54,8 +54,8 @@ struct FolderErrorView: View {
                 .accessibilityHidden(true)
             Text(message).font(.title3)
             HStack {
-                if pane.canGoUp { Button("Enclosing Folder", action: goUp) }
-                Button("Try Again", action: tryAgain)
+                if pane.canGoUp { Button("Enclosing Folder", action: { goUp() }) }
+                Button("Try Again", action: { tryAgain() })
             }
         }
         .padding(40)

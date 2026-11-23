@@ -57,8 +57,8 @@ struct PathBarView: View {
         }
         .frame(height: 22)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: startEditing)
-        .accessibilityAction(named: Text("Type a Path"), startEditing)
+        .onTapGesture(count: 2) { startEditing() }
+        .accessibilityAction(named: Text("Type a Path")) { startEditing() }
     }
 
     private var crumbRow: some View {
@@ -75,7 +75,7 @@ struct PathBarView: View {
 
     private var editor: some View {
         VStack(alignment: .leading, spacing: 2) {
-            PathField(text: $text, onKey: handle)
+            PathField(text: $text, onKey: { (key: PathField.Key) -> Bool in handle(key) })
                 .frame(height: 22)
             SuggestionList(suggestions: suggestions, choice: choice)
         }
@@ -127,7 +127,7 @@ private struct Crumb: View {
     let title: String
     let isFirst: Bool
     let isCurrent: Bool
-    let action: () -> Void
+    let action: @MainActor () -> Void
 
     var body: some View {
         HStack(spacing: 2) {
@@ -137,7 +137,7 @@ private struct Crumb: View {
                     .foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
-            Button(title, action: action)
+            Button(title, action: { action() })
                 .buttonStyle(.plain)
                 .fontWeight(weight)
                 .padding(.horizontal, 4)
@@ -190,9 +190,9 @@ private struct PathErrorLine: View {
                 .accessibilityHidden(true)
             Text(PathBar.missingMessage(name: name, parent: parent))
             suggestionButton
-            Button("Create This Folder", action: create)
+            Button("Create This Folder", action: { create() })
             Spacer()
-            Button(action: dismiss) { Image(systemName: "xmark") }
+            Button(action: { dismiss() }) { Image(systemName: "xmark") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss")
         }
@@ -201,7 +201,7 @@ private struct PathErrorLine: View {
 
     @ViewBuilder private var suggestionButton: some View {
         if let suggestion {
-            Button(Self.didYouMean(suggestion), action: goToSuggestion).buttonStyle(.link)
+            Button(Self.didYouMean(suggestion), action: { goToSuggestion() }).buttonStyle(.link)
         }
     }
 

@@ -4,7 +4,7 @@ import Observation
 import UniformTypeIdentifiers
 import FileOSCore
 
-enum Page: Hashable {
+enum Page: Hashable, Sendable {
     case browser, home, bookmarks, freeUpSpace, installed, agents, workspace(UUID), aboutMac
 
     var title: String {
@@ -52,7 +52,6 @@ final class AppModel {
     private(set) var favorites: [URL]
     private(set) var volumes: [URL] = []
     private(set) var collapsedSections: Set<String>
-    var locationsExpanded = false // F2.1: Locations always starts folded
     /// The Mac's sharing name, read from the local configuration store (no network lookup, unlike Host).
     var macName: String { (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac" }
 

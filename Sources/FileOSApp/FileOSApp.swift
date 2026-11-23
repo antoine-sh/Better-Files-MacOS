@@ -20,25 +20,25 @@ struct FileOSCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button(hiddenTitle, action: toggleHidden)
+            Button(hiddenTitle, action: { toggleHidden() })
                 .keyboardShortcut(".", modifiers: [.command, .shift])
         }
         CommandMenu("Go") {
-            Button("Back", action: back)
+            Button("Back", action: { back() })
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!model.pane.canGoBack)
-            Button("Forward", action: forward)
+            Button("Forward", action: { forward() })
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(!model.pane.canGoForward)
-            Button("Enclosing Folder", action: up)
+            Button("Enclosing Folder", action: { up() })
                 .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(!model.pane.canGoUp)
-            Button("Open", action: openSelection)
+            Button("Open", action: { openSelection() })
                 .keyboardShortcut(.downArrow, modifiers: .command)
             Divider()
-            Button("Go to Folder…", action: editPath)
+            Button("Go to Folder…", action: { editPath() })
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("Type a Path", action: editPath)
+            Button("Type a Path", action: { editPath() })
                 .keyboardShortcut("l", modifiers: .command)
         }
     }

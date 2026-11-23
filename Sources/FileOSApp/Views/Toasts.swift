@@ -23,7 +23,7 @@ private struct ToastRow: View {
         HStack(spacing: 12) {
             Text(toast.text)
             undoButton
-            Button(action: dismiss) { Image(systemName: "xmark") }
+            Button(action: { dismiss() }) { Image(systemName: "xmark") }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Dismiss")
         }
@@ -35,7 +35,7 @@ private struct ToastRow: View {
     }
 
     @ViewBuilder private var undoButton: some View {
-        if toast.undoable { Button("Undo", action: undo) }
+        if toast.undoable { Button("Undo", action: { undo() }) }
     }
 
     private func dismiss() { model.dismiss(toast) }

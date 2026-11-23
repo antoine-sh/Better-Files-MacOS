@@ -9,7 +9,11 @@ struct FileListView: View {
 
     var body: some View {
         table
-            .contextMenu(forSelectionType: String.self, menu: menu, primaryAction: open)
+            .contextMenu(forSelectionType: String.self) { (ids: Set<String>) in
+                menu(ids)
+            } primaryAction: { (ids: Set<String>) in
+                open(ids)
+            }
             .overlay { emptyNote }
     }
 

@@ -1,25 +1,37 @@
 import SwiftUI
 import FileOSCore
 
-enum SidebarItem: Hashable {
+enum SidebarItem: Hashable, Sendable {
     case folder(URL), page(Page)
 }
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
+    // Plain @State instead of Binding(get:set:): Swift 6.1's IRGen crashed on the
+    // isolation thunk for a Binding<SidebarItem?> built from closures.
+    @State private var selection: SidebarItem?
+    @State private var favoritesOpen = true
+    @State private var toolsOpen = true
+    @State private var locationsOpen = false // F2.1: Locations always starts folded
 
     var body: some View {
-        List(selection: selection) {
+        List(selection: $selection) {
             favorites
             tools
             locations
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) { DiskLine() }
+        .onAppear { loadState() }
+        .onChange(of: selection) { applySelection() }
+        .onChange(of: model.page) { syncSelection() }
+        .onChange(of: model.pane.url) { syncSelection() }
+        .onChange(of: favoritesOpen) { model.setExpanded("Favorites", favoritesOpen) }
+        .onChange(of: toolsOpen) { model.setExpanded("Tools", toolsOpen) }
     }
 
     private var favorites: some View {
-        Section("Favorites", isExpanded: expanded("Favorites")) {
+        Section("Favorites", isExpanded: $favoritesOpen) {
             ForEach(favoriteURLs, id: \.self) { (url: URL) in
                 SidebarRow(title: url.lastPathComponent, symbol: Self.symbol(for: url.lastPathComponent),
                            item: .folder(url))
@@ -28,7 +40,7 @@ struct SidebarView: View {
     }
 
     private var tools: some View {
-        Section("Tools", isExpanded: expanded("Tools")) {
+        Section("Tools", isExpanded: $toolsOpen) {
             SidebarRow(title: "Free Up Space", symbol: "sparkles", item: .page(.freeUpSpace))
             SidebarRow(title: "Installed", symbol: "shippingbox", item: .page(.installed))
             SidebarRow(title: "AI Agents", symbol: "cpu", item: .page(.agents))
@@ -36,7 +48,7 @@ struct SidebarView: View {
     }
 
     private var locations: some View {
-        Section("Locations", isExpanded: locationsExpanded) {
+        Section("Locations", isExpanded: $locationsOpen) {
             SidebarRow(title: model.home.lastPathComponent, symbol: "house", item: .folder(model.home))
             SidebarRow(title: model.displayName(Self.root), symbol: "internaldrive", item: .folder(Self.root))
             ForEach(model.volumes, id: \.self) { (url: URL) in
@@ -54,29 +66,28 @@ struct SidebarView: View {
         return urls
     }
 
-    private var selection: Binding<SidebarItem?> {
-        Binding<SidebarItem?>(get: currentItem, set: activate)
-    }
-
-    private func currentItem() -> SidebarItem? {
+    private func currentItem() -> SidebarItem {
         if model.page == .browser { return .folder(model.pane.url) }
         return .page(model.page)
     }
 
-    private func activate(_ item: SidebarItem?) {
+    private func loadState() {
+        favoritesOpen = model.isExpanded("Favorites")
+        toolsOpen = model.isExpanded("Tools")
+        syncSelection()
+    }
+
+    private func syncSelection() {
+        let current: SidebarItem = currentItem()
+        if selection != current { selection = current }
+    }
+
+    private func applySelection() {
+        guard let item = selection, item != currentItem() else { return }
         switch item {
-        case .folder(let url)?: model.open(url)
-        case .page(let page)?: model.page = page
-        case nil: break
+        case .folder(let url): model.open(url)
+        case .page(let page): model.page = page
         }
-    }
-
-    private var locationsExpanded: Binding<Bool> {
-        Binding<Bool>(get: { model.locationsExpanded }, set: { (value: Bool) in model.locationsExpanded = value })
-    }
-
-    private func expanded(_ section: String) -> Binding<Bool> {
-        Binding<Bool>(get: { model.isExpanded(section) }, set: { (value: Bool) in model.setExpanded(section, value) })
     }
 
     static func symbol(for name: String) -> String {
@@ -113,7 +124,7 @@ struct DiskLine: View {
     }
 
     var body: some View {
-        Button(action: showAbout) { content(disk) }
+        Button(action: { showAbout() }) { content(disk) }
             .buttonStyle(.plain)
             .help(Self.hoverText(disk))
             .accessibilityLabel(Self.accessibilityText(macName, disk))

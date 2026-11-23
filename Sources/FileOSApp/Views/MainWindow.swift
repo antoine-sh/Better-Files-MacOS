@@ -50,8 +50,8 @@ struct BrowserView: View {
 
     private var navigationButtons: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
-            IconButton(symbol: "chevron.left", label: "Back", help: "Back (⌘[)", disabled: !pane.canGoBack, action: back)
-            IconButton(symbol: "chevron.right", label: "Forward", help: "Forward (⌘])", disabled: !pane.canGoForward, action: forward)
+            IconButton(symbol: "chevron.left", label: "Back", help: "Back (⌘[)", disabled: !pane.canGoBack, action: { back() })
+            IconButton(symbol: "chevron.right", label: "Forward", help: "Forward (⌘])", disabled: !pane.canGoForward, action: { forward() })
         }
     }
 
@@ -76,10 +76,10 @@ struct IconButton: View {
     let label: String
     let help: String
     let disabled: Bool
-    let action: () -> Void
+    let action: @MainActor () -> Void
 
     var body: some View {
-        Button(action: action) { Image(systemName: symbol) }
+        Button(action: { action() }) { Image(systemName: symbol) }
             .disabled(disabled)
             .help(help)
             .accessibilityLabel(label)
