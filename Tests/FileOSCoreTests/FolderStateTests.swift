@@ -28,3 +28,19 @@ final class FolderStateTests: XCTestCase {
         XCTAssertEqual(PathBar.display("/Users/samuel", home: home), "/Users/samuel")
     }
 }
+
+final class CanonicalURLTests: XCTestCase {
+    func testTrailingSlashAndDotsDoNotMatter() throws {
+        let tmp = makeTempDir()
+        let docs = tmp.appendingPathComponent("Documents")
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let viaAppend = tmp.appendingPathComponent("Documents")              // may carry a trailing slash
+        let viaParent = docs.appendingPathComponent("a.txt").deletingLastPathComponent()
+        let viaString = URL(fileURLWithPath: tmp.path + "/x/../Documents/")
+        XCTAssertEqual(FileOps.canonical(viaAppend), FileOps.canonical(viaParent))
+        XCTAssertEqual(FileOps.canonical(viaAppend), FileOps.canonical(viaString))
+        XCTAssertEqual(FileOps.canonical(viaAppend).path, tmp.path + "/Documents")
+        XCTAssertEqual(FileOps.canonical(URL(fileURLWithPath: "/")).path, "/")
+        XCTAssertEqual(FileOps.canonical(docs.deletingLastPathComponent()), FileOps.canonical(tmp))
+    }
+}

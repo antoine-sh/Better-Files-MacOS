@@ -43,18 +43,26 @@ enum SelfTest {
         check("missing folder screen", missingState == .unavailable("“Nope” could not be found"))
 
         pane.back()
-        check("back returns to Documents", pane.url == docs.standardizedFileURL)
+        check("back returns to Documents", pane.url == FileOps.canonical(docs))
         check("forward is available", pane.canGoForward)
         pane.forward()
-        check("forward goes to the missing folder", pane.url == missing.standardizedFileURL)
+        check("forward goes to the missing folder", pane.url == FileOps.canonical(missing))
         pane.navigate(to: docs)
         pane.up()
-        check("up goes to the parent", pane.url == home.standardizedFileURL)
+        check("up goes to the parent", pane.url == FileOps.canonical(home))
         check("up selects the folder it came from", pane.selection == Set([docs.path]))
+
+        check("home is the sidebar's home row", pane.url == model.home)
+        pane.navigate(to: docs)
+        let depth: Int = pane.history.count
+        pane.navigate(to: URL(fileURLWithPath: docs.path + "/"))
+        check("same folder with a trailing slash adds no history", pane.history.count == depth)
+        pane.navigate(to: URL(fileURLWithPath: home.path + "/x/../Documents"))
+        check("same folder spelled with .. adds no history", pane.history.count == depth)
 
         let wentDocs: Bool = model.go("~/Documents")
         check("path bar opens ~/Documents", wentDocs)
-        check("path bar is in Documents", pane.url == docs.standardizedFileURL)
+        check("path bar is in Documents", pane.url == FileOps.canonical(docs))
         let wentFile: Bool = model.go("~/Documents/a.txt")
         check("path bar opens a file's folder", wentFile)
         check("path bar selects the file", pane.selection == Set([aTxt.path]))
@@ -71,7 +79,7 @@ enum SelfTest {
         model.createMissingFolder()
         let created: URL = home.appendingPathComponent("New Stuff")
         check("Create This Folder makes it", fm.fileExists(atPath: created.path))
-        check("Create This Folder opens it", pane.url == created.standardizedFileURL)
+        check("Create This Folder opens it", pane.url == FileOps.canonical(created))
         check("Create This Folder is undoable", model.undo.canUndo)
         check("Create This Folder shows an Undo toast", model.toasts.contains { (t: Toast) -> Bool in t.undoable })
 
@@ -116,24 +124,38 @@ enum SelfTest {
         let pages: [Page] = [.freeUpSpace, .installed, .agents, .aboutMac]
         for page in pages {
             model.page = page
-            check("page \(page.title) hosts", host(model))
+            let views: [NSView] = hostedViews(model)
+            check("page \(page.title) builds a split view", views.contains { (v: NSView) -> Bool in v is NSSplitView })
         }
         model.page = .browser
         pane.navigate(to: docs)
-        check("main window lays out offscreen", host(model))
+        let browserViews: [NSView] = hostedViews(model)
+        check("browser builds a split view", browserViews.contains { (v: NSView) -> Bool in v is NSSplitView })
+        check("browser builds the list table", browserViews.contains { (v: NSView) -> Bool in v is NSTableView })
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
         return ok
     }
 
-    /// Hosts MainWindow in an NSHostingView without presenting a window and forces layout.
-    private static func host(_ model: AppModel) -> Bool {
+    /// Hosts MainWindow in a borderless window that is never ordered front, lays it out,
+    /// and returns every view in the hierarchy so checks can assert on real structure.
+    private static func hostedViews(_ model: AppModel) -> [NSView] {
         _ = NSApplication.shared
-        let view = NSHostingView(rootView: MainWindow().environment(model))
-        view.frame = NSRect(x: 0, y: 0, width: 1000, height: 640)
-        view.layoutSubtreeIfNeeded()
-        let hasContent: Bool = !view.subviews.isEmpty || view.fittingSize != .zero
-        return view.frame.width == 1000 && hasContent
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: MainWindow().environment(model))
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 640)
+        host.layoutSubtreeIfNeeded()
+        var all: [NSView] = []
+        var stack: [NSView] = [host]
+        while let view = stack.popLast() {
+            all.append(view)
+            stack.append(contentsOf: view.subviews)
+        }
+        window.contentView = nil
+        return all
     }
 }

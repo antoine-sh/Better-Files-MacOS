@@ -29,7 +29,7 @@ final class PaneModel {
     @ObservationIgnored private var reloadPending = false
 
     init(url: URL, showHidden: Bool = false) {
-        self.url = url.standardizedFileURL
+        self.url = FileOps.canonical(url)
         self.showHidden = showHidden
         reload()
     }
@@ -48,8 +48,15 @@ final class PaneModel {
 
     var selectedEntries: [Entry] { entries.filter { selection.contains($0.id) } }
 
+    /// Selected items the filter still shows, for the status bar.
+    var visibleSelectionCount: Int {
+        var n = 0
+        for entry in visibleEntries where selection.contains(entry.id) { n += 1 }
+        return n
+    }
+
     func navigate(to target: URL, select: URL? = nil) {
-        let target = target.standardizedFileURL
+        let target = FileOps.canonical(target)
         if target != url {
             history.append(url)
             forwardStack.removeAll()
@@ -78,7 +85,9 @@ final class PaneModel {
         do {
             entries = try FileOps.listDirectory(url, showHidden: showHidden)
             error = nil
+            watcher.watch(url) { [weak self] in self?.scheduleReload() }
         } catch {
+            watcher.stop() // a deleted folder's old vnode would never fire again
             entries = []
             // Non-FileOSError failures (e.g. not a directory) read as "can't be found" rather than a blank pane.
             self.error = (error as? FileOSError) ?? .notFound(url.path)
@@ -86,13 +95,12 @@ final class PaneModel {
         let ids = Set(entries.map(\.id))
         selection.formIntersection(ids)
         freeSpace = FileOps.diskInfo(for: url).free
-        watcher.watch(url) { [weak self] in self?.scheduleReload() }
     }
 
     private func show(_ target: URL, select: URL?) {
         url = target
         filter = ""
-        selection = select.map { Set([$0.standardizedFileURL.path]) } ?? []
+        selection = select.map { (u: URL) -> Set<String> in [FileOps.canonical(u).path] } ?? []
         reload()
     }
 

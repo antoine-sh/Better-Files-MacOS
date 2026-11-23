@@ -76,6 +76,12 @@ private func sameInode(_ a: URL, _ b: URL) -> Bool {
 }
 
 public enum FileOps {
+    /// One spelling per folder: no "..", ".", or trailing-slash differences, so URLs compare with ==.
+    /// (appendingPathComponent adds a trailing slash when the folder exists; standardizedFileURL keeps it.)
+    public static func canonical(_ url: URL) -> URL {
+        URL(fileURLWithPath: url.standardizedFileURL.path, isDirectory: true)
+    }
+
     public static func listDirectory(_ dir: URL, showHidden: Bool = false) throws -> [Entry] {
         let names: [String]
         do { names = try FileManager.default.contentsOfDirectory(atPath: dir.path) } catch { throw mapped(error, dir) }

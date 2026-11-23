@@ -1,4 +1,5 @@
 import AppKit
+import SystemConfiguration
 import Observation
 import UniformTypeIdentifiers
 import FileOSCore
@@ -52,18 +53,19 @@ final class AppModel {
     private(set) var volumes: [URL] = []
     private(set) var collapsedSections: Set<String>
     var locationsExpanded = false // F2.1: Locations always starts folded
-    let macName = Host.current().localizedName ?? "Mac"
+    /// The Mac's sharing name, read from the local configuration store (no network lookup, unlike Host).
+    var macName: String { (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac" }
 
     static var defaultHome: URL {
         URL(fileURLWithPath: ProcessInfo.processInfo.environment["FILEOS_HOME"] ?? NSHomeDirectory())
     }
 
     init(home: URL) {
-        self.home = home.standardizedFileURL
+        self.home = FileOps.canonical(home)
         store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
         let hidden = store.get("showHidden", default: false)
         showHidden = hidden
-        favorites = store.get("favorites", default: [String]()).map { URL(fileURLWithPath: $0) }
+        favorites = store.get("favorites", default: [String]()).map { (p: String) -> URL in FileOps.canonical(URL(fileURLWithPath: p)) }
         collapsedSections = Set(store.get("sidebar.collapsed", default: [String]()))
         panes = [PaneModel(url: home, showHidden: hidden)]
         refreshVolumes()
@@ -72,15 +74,18 @@ final class AppModel {
     var pane: PaneModel { panes[activePane] }
 
     var standardFavorites: [URL] {
-        ["Desktop", "Documents", "Downloads", "Pictures"].map { home.appendingPathComponent($0) }
+        ["Desktop", "Documents", "Downloads", "Pictures"].map { (name: String) -> URL in
+            FileOps.canonical(home.appendingPathComponent(name))
+        }
     }
 
-    var trashURL: URL { home.appendingPathComponent(".Trash") }
+    var trashURL: URL { FileOps.canonical(home.appendingPathComponent(".Trash")) }
 
     // MARK: Navigation
 
     func open(_ url: URL) {
         page = .browser
+        pathError = nil
         pane.navigate(to: url)
     }
 
@@ -123,7 +128,9 @@ final class AppModel {
         case .path(let raw):
             switch PathBar.resolve(raw, cwd: pane.url, home: home) {
             case .folder(let url): open(url)
-            case let .file(url, dir): page = .browser; pane.navigate(to: dir, select: url)
+            case let .file(url, dir):
+                page = .browser
+                pane.navigate(to: dir, select: url)
             case let .missing(name, parent, suggestion):
                 pathError = (name, parent, suggestion)
                 return false
@@ -142,13 +149,13 @@ final class AppModel {
             toast("Couldn't create “\(missing.name)”: \(error.localizedDescription)", undoable: false)
             return
         }
-        pathError = nil
         undo.push("New Folder") {
             // Undo goes through the Trash, so anything put in the folder since is still recoverable.
             do { _ = try FileOps.trash([url], trashDir: nil); return RestoreResult(restored: [url]) }
             catch { return RestoreResult(failed: [(url, error.localizedDescription)]) }
         }
-        open(url)
+        open(url) // also clears pathError
+        editingPath = false
         toast("Created “\(missing.name)”", undoable: true)
     }
 
@@ -176,7 +183,7 @@ final class AppModel {
         // shortcut: read at launch and on demand; listen to NSWorkspace mount notifications with eject (F2.6)
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey],
                                                          options: [.skipHiddenVolumes]) ?? []
-        volumes = urls.filter { $0.path != "/" }
+        volumes = urls.filter { $0.path != "/" }.map(FileOps.canonical)
     }
 
     func isExpanded(_ section: String) -> Bool { !collapsedSections.contains(section) }

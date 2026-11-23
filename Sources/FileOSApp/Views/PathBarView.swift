@@ -17,7 +17,7 @@ struct PathBarView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .onChange(of: model.editingPath) { (_: Bool, editing: Bool) in
+        .onChange(of: model.editingPath, initial: true) { (_: Bool, editing: Bool) in
             if editing { beginEditing() }
         }
     }
@@ -42,11 +42,11 @@ struct PathBarView: View {
 
     private var crumbURLs: [URL] {
         var urls: [URL] = []
-        var url = pane.url
+        var url: URL = pane.url
         while true {
             urls.insert(url, at: 0)
             if url.path == "/" { break }
-            url = url.deletingLastPathComponent()
+            url = FileOps.canonical(url.deletingLastPathComponent())
         }
         return urls
     }
@@ -208,7 +208,7 @@ private struct PathErrorLine: View {
     static func didYouMean(_ suggestion: String) -> String { "Did you mean \(suggestion)?" }
 
     private func goToSuggestion() {
-        if let suggestion { model.go(suggestion) }
+        if let suggestion, model.go(suggestion) { model.editingPath = false }
     }
 
     private func create() { model.createMissingFolder() }

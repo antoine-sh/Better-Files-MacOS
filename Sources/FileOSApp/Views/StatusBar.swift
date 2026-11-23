@@ -13,7 +13,7 @@ struct StatusBar: View {
     }
 
     private var summary: String {
-        Self.text(items: pane.visibleEntries.count, selected: pane.selection.count, free: pane.freeSpace)
+        Self.text(items: pane.visibleEntries.count, selected: pane.visibleSelectionCount, free: pane.freeSpace)
     }
 
     var body: some View {

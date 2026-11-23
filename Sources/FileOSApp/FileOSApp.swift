@@ -45,9 +45,20 @@ struct FileOSCommands: Commands {
 
     private var hiddenTitle: String { model.showHidden ? "Hide Hidden Files" : "Show Hidden Files" }
     private func toggleHidden() { model.toggleHidden() }
-    private func back() { model.pane.back() }
-    private func forward() { model.pane.forward() }
-    private func openSelection() { model.openSelection() }
+    private func back() {
+        model.page = .browser
+        model.pane.back()
+    }
+
+    private func forward() {
+        model.page = .browser
+        model.pane.forward()
+    }
+
+    private func openSelection() {
+        model.page = .browser
+        model.openSelection()
+    }
 
     private func up() {
         model.page = .browser

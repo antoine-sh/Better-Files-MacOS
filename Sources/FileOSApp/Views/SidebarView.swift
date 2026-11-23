@@ -46,7 +46,7 @@ struct SidebarView: View {
         }
     }
 
-    private static let root = URL(fileURLWithPath: "/")
+    private static let root = FileOps.canonical(URL(fileURLWithPath: "/"))
 
     private var favoriteURLs: [URL] {
         var urls: [URL] = model.standardFavorites
@@ -105,6 +105,7 @@ struct DiskLine: View {
     @Environment(AppModel.self) private var model
 
     private var disk: (total: Int64, free: Int64) { FileOps.diskInfo(for: model.home) }
+    private var macName: String { model.macName }
 
     static func usedFraction(total: Int64, free: Int64) -> Double {
         guard total > 0 else { return 0 }
@@ -115,7 +116,7 @@ struct DiskLine: View {
         Button(action: showAbout) { content(disk) }
             .buttonStyle(.plain)
             .help(Self.hoverText(disk))
-            .accessibilityLabel(Self.accessibilityText(model.macName, disk))
+            .accessibilityLabel(Self.accessibilityText(macName, disk))
     }
 
     private func showAbout() { model.page = .aboutMac }
@@ -125,7 +126,7 @@ struct DiskLine: View {
         let tint: Color = used >= 0.9 ? Color.orange : Color.accentColor
         let freeText: String = "\(formatBytes(disk.free)) available"
         return VStack(alignment: .leading, spacing: 4) {
-            Text(model.macName).font(.caption.weight(.semibold))
+            Text(macName).font(.caption.weight(.semibold))
             ProgressView(value: used).tint(tint)
             Text(freeText).font(.caption).foregroundStyle(.secondary)
         }
