@@ -84,7 +84,10 @@ enum AppMain {
                 let ok = await SelfTest.run(model: SelfTest.makeModel())
                 exit(ok ? 0 : 1)
             }
-            dispatchMain() // services the main queue, which runs main-actor tasks
+            // Not dispatchMain(): it exits the main thread and drains the main queue on a worker,
+            // which AppKit rejects ("NSWindow should only be instantiated on the main thread").
+            // The main run loop drains the main queue (and so main-actor tasks) on the real main thread.
+            while true { RunLoop.main.run() }
         }
         // `swift run` launches a bare executable; make it a regular, foreground app.
         NSApplication.shared.setActivationPolicy(.regular)

@@ -21,6 +21,7 @@ enum SelfTest {
             print("\(passed ? "ok  " : "FAIL") \(name)")
             if !passed { ok = false }
         }
+        check("runs on the main thread", pthread_main_np() != 0)
         let fm = FileManager.default
         let home: URL = model.home
         let docs: URL = home.appendingPathComponent("Documents")
