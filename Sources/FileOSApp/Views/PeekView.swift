@@ -220,7 +220,8 @@ private struct QuickLookPreview: NSViewRepresentable {
 
     func updateNSView(_ view: QLPreviewView, context: Context) {}
 
-    static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) { view.close() }
+    // Not close(): a closed view aborts when torn down outside a window close; dropping the item frees the preview.
+    static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) { view.previewItem = nil }
 }
 
 /// Audio and video play as soon as they show.
