@@ -53,7 +53,7 @@ public struct RestoreResult: Sendable {
 private func posixRename(_ from: String, _ to: String) -> Int32 { rename(from, to) }
 
 
-private func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
+func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
 
 /// Maps Cocoa/POSIX permission and missing-file errors to FileOSError; other errors pass through.
 private func mapped(_ error: Error, _ url: URL) -> Error {
