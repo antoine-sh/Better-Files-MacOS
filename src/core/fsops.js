@@ -70,7 +70,7 @@ export async function renameItem(path, newName) {
 }
 
 // rename, falling back to copy+remove across devices
-async function move(from, to) {
+export async function move(from, to) {
   try { await rename(from, to); } catch (e) {
     if (e.code !== 'EXDEV') throw e;
     await cp(from, to, { recursive: true, errorOnExist: true, force: false });
