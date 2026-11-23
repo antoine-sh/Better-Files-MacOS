@@ -45,7 +45,8 @@ public enum PathBar {
         if !text.contains("/") && text != "~" {
             // Bare name: a child of cwd or home, case-insensitively.
             for base in [cwd, home] {
-                if let hit = children(base).first(where: { $0.lowercased() == text.lowercased() }) {
+                let kids = children(base)
+                if let hit = kids.first(where: { $0 == text }) ?? kids.first(where: { $0.lowercased() == text.lowercased() }) {
                     url = base.appendingPathComponent(hit); break
                 }
             }

@@ -32,28 +32,46 @@ public struct ProcessRunner: CommandRunner {
 
     private final class Box: @unchecked Sendable {
         let process = Process()
+        let pipe = Pipe()
+        let exited = DispatchSemaphore(value: 0)
+        let eof = DispatchSemaphore(value: 0)
         private let lock = NSLock()
-        private var _timedOut = false
-        var timedOut: Bool { lock.withLock { _timedOut } }
-        // SIGKILL directly: Process.terminate() was ignored for ~5s on Linux Foundation.
-        func stop() { lock.withLock { _timedOut = true }; if process.isRunning { _ = Foundation.kill(process.processIdentifier, SIGKILL) } }
+        private var buffer = Data()
+        var output: Data { lock.withLock { buffer } }
+        func append(_ d: Data) { lock.withLock { buffer.append(d) } }
+        /// SIGKILL directly (Process.terminate() was ignored for ~5s on Linux Foundation).
+        /// Returns whether the process was still running, i.e. whether the kill is the reason it ended.
+        func stop() -> Bool {
+            lock.withLock {
+                guard process.isRunning else { return false }
+                _ = Foundation.kill(process.processIdentifier, SIGKILL)
+                return true
+            }
+        }
     }
 
+    // The deadline bounds the whole call: a grandchild that inherited stdout can keep the pipe
+    // open after the child is gone, so we never wait for EOF past the deadline.
     private static func runSync(_ url: URL, _ args: [String], timeout: TimeInterval) throws -> (status: Int32, stdout: String) {
-        let box = Box(), pipe = Pipe()
+        let box = Box()
         box.process.executableURL = url
         box.process.arguments = args
-        box.process.standardOutput = pipe
+        box.process.standardOutput = box.pipe
         box.process.standardError = FileHandle.nullDevice
         box.process.standardInput = FileHandle.nullDevice
+        box.process.terminationHandler = { _ in box.exited.signal() }
         do { try box.process.run() } catch { throw CommandError.notFound(url.lastPathComponent) }
-        let timer = DispatchWorkItem { box.stop() }
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
-        // Reading to EOF before waiting avoids a full-pipe deadlock.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        box.process.waitUntilExit()
-        timer.cancel()
-        if box.timedOut { throw CommandError.timedOut }
-        return (box.process.terminationStatus, String(decoding: data, as: UTF8.self))
+        Thread.detachNewThread {
+            let h = box.pipe.fileHandleForReading
+            while case let d = h.availableData, !d.isEmpty { box.append(d) }
+            box.eof.signal()
+        }
+        let deadline = DispatchTime.now() + timeout
+        if box.exited.wait(timeout: deadline) == .timedOut {
+            if box.stop() { throw CommandError.timedOut }
+            box.exited.wait() // exited in the instant between the deadline and the kill: not a timeout
+        }
+        if box.eof.wait(timeout: deadline) == .timedOut { throw CommandError.timedOut }
+        return (box.process.terminationStatus, String(decoding: box.output, as: UTF8.self))
     }
 }

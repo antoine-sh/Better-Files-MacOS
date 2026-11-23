@@ -36,7 +36,7 @@ public enum OpenIn {
         ("phpstorm", "PhpStorm", .editor, "PhpStorm"),
         ("rubymine", "RubyMine", .editor, "RubyMine"),
         ("androidstudio", "Android Studio", .editor, "Android Studio"),
-        ("cmux", "cmux", .editor, "cmux"),
+        ("cmux", "cmux", .terminal, "cmux"),
     ] as [(String, String, ExternalApp.Kind, String)]).map { ExternalApp(id: $0.0, name: $0.1, kind: $0.2, bundleName: $0.3) }
 
     /// Terminal: the first selected folder, else cwd. Editor: the first selected item, else cwd.
