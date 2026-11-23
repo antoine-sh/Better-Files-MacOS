@@ -1,0 +1,17 @@
+import Foundation
+import XCTest
+
+func makeTempDir() -> URL {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fileos-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+@discardableResult
+func touch(_ dir: URL, _ rel: String, _ content: String = "x", modified: Date? = nil) -> URL {
+    let url = dir.appendingPathComponent(rel)
+    try! FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try! content.write(to: url, atomically: true, encoding: .utf8)
+    if let modified { try! FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path) }
+    return url
+}
