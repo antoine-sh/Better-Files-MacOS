@@ -199,15 +199,23 @@ final class AppModel {
 
     func dismiss(_ toast: Toast) { toasts.removeAll { $0.id == toast.id } }
 
+    static func restoreFailureText(_ result: RestoreResult) -> String {
+        var names: [String] = []
+        for failure in result.failed {
+            let name: String = failure.url.lastPathComponent
+            names.append("“\(name)” (\(failure.reason))")
+        }
+        let count: Int = result.failed.count
+        let items: String = count == 1 ? "1 item" : "\(count) items"
+        let list: String = names.joined(separator: ", ")
+        return "Couldn't restore \(items): \(list)"
+    }
+
     func performUndo() {
         Task {
             guard let result = await undo.undo()?.result else { return }
             for p in panes { p.reload() }
-            if !result.failed.isEmpty {
-                let names = result.failed.map { "“\($0.url.lastPathComponent)” (\($0.reason))" }.joined(separator: ", ")
-                toast("Couldn't restore \(result.failed.count == 1 ? "1 item" : "\(result.failed.count) items"): \(names)",
-                      undoable: false)
-            }
+            if !result.failed.isEmpty { toast(Self.restoreFailureText(result), undoable: false) }
         }
     }
 }

@@ -7,13 +7,19 @@ struct StatusBar: View {
     @Environment(AppModel.self) private var model
 
     static func text(items: Int, selected: Int, free: Int64) -> String {
-        "\(items == 1 ? "1 item" : "\(items) items"), \(selected) selected, \(formatBytes(free)) available"
+        let count: String = items == 1 ? "1 item" : "\(items) items"
+        let space: String = formatBytes(free)
+        return "\(count), \(selected) selected, \(space) available"
+    }
+
+    private var summary: String {
+        Self.text(items: pane.visibleEntries.count, selected: pane.selection.count, free: pane.freeSpace)
     }
 
     var body: some View {
         HStack {
             Spacer()
-            Text(Self.text(items: pane.visibleEntries.count, selected: pane.selection.count, free: pane.freeSpace))
+            Text(summary)
             Spacer()
             if model.showHidden {
                 Text("Hidden files shown").help("Press ⇧⌘. to hide them")

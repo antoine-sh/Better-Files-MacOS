@@ -20,27 +20,38 @@ struct FileOSCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            Button(model.showHidden ? "Hide Hidden Files" : "Show Hidden Files") { model.toggleHidden() }
+            Button(hiddenTitle, action: toggleHidden)
                 .keyboardShortcut(".", modifiers: [.command, .shift])
         }
         CommandMenu("Go") {
-            Button("Back") { model.pane.back() }
+            Button("Back", action: back)
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!model.pane.canGoBack)
-            Button("Forward") { model.pane.forward() }
+            Button("Forward", action: forward)
                 .keyboardShortcut("]", modifiers: .command)
                 .disabled(!model.pane.canGoForward)
-            Button("Enclosing Folder") { model.page = .browser; model.pane.up() }
+            Button("Enclosing Folder", action: up)
                 .keyboardShortcut(.upArrow, modifiers: .command)
                 .disabled(!model.pane.canGoUp)
-            Button("Open") { model.openSelection() }
+            Button("Open", action: openSelection)
                 .keyboardShortcut(.downArrow, modifiers: .command)
             Divider()
-            Button("Go to Folder…") { editPath() }
+            Button("Go to Folder…", action: editPath)
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("Type a Path") { editPath() }
+            Button("Type a Path", action: editPath)
                 .keyboardShortcut("l", modifiers: .command)
         }
+    }
+
+    private var hiddenTitle: String { model.showHidden ? "Hide Hidden Files" : "Show Hidden Files" }
+    private func toggleHidden() { model.toggleHidden() }
+    private func back() { model.pane.back() }
+    private func forward() { model.pane.forward() }
+    private func openSelection() { model.openSelection() }
+
+    private func up() {
+        model.page = .browser
+        model.pane.up()
     }
 
     private func editPath() {
@@ -53,6 +64,11 @@ struct FileOSCommands: Commands {
 enum AppMain {
     static func main() {
         if CommandLine.arguments.contains("--self-test") {
+            // Watchdog off the main thread, so even a main-thread hang fails CI instead of stalling it.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 60) {
+                print("SELFTEST TIMEOUT")
+                exit(1)
+            }
             Task { @MainActor in
                 let ok = await SelfTest.run(model: SelfTest.makeModel())
                 exit(ok ? 0 : 1)

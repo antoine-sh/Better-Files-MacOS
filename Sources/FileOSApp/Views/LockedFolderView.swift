@@ -15,16 +15,19 @@ struct LockedFolderView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text(FolderState.lockedTitle(folder)).font(.title2.weight(.semibold))
-            Button("Give FileOS Full Access") { _ = NSWorkspace.shared.open(Self.fullDiskAccess) }
+            Button("Give FileOS Full Access", action: openFullDiskAccess)
                 .buttonStyle(.borderedProminent)
             HStack {
-                Button("Allow Just This Folder…") { allowJustThisFolder() }
-                Button("Try Again") { pane.reload() }
+                Button("Allow Just This Folder…", action: allowJustThisFolder)
+                Button("Try Again", action: tryAgain)
             }
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    private func openFullDiskAccess() { _ = NSWorkspace.shared.open(Self.fullDiskAccess) }
+    private func tryAgain() { pane.reload() }
 
     /// Picking the folder in an open panel is the user intent macOS accepts as access to it.
     private func allowJustThisFolder() {
@@ -51,11 +54,14 @@ struct FolderErrorView: View {
                 .accessibilityHidden(true)
             Text(message).font(.title3)
             HStack {
-                if pane.canGoUp { Button("Enclosing Folder") { pane.up() } }
-                Button("Try Again") { pane.reload() }
+                if pane.canGoUp { Button("Enclosing Folder", action: goUp) }
+                Button("Try Again", action: tryAgain)
             }
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    private func goUp() { pane.up() }
+    private func tryAgain() { pane.reload() }
 }

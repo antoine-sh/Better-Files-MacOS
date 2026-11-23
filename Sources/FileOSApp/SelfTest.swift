@@ -22,46 +22,65 @@ enum SelfTest {
             if !passed { ok = false }
         }
         let fm = FileManager.default
-        let home = model.home
-        let docs = home.appendingPathComponent("Documents")
-        let pane = model.pane
+        let home: URL = model.home
+        let docs: URL = home.appendingPathComponent("Documents")
+        let aTxt: URL = docs.appendingPathComponent("a.txt")
+        let pane: PaneModel = model.pane
 
         pane.navigate(to: docs)
-        check("lists Documents/a.txt", pane.entries.map(\.name) == ["a.txt"] && pane.error == nil)
+        let names: [String] = pane.entries.map { (e: Entry) -> String in e.name }
+        check("lists Documents/a.txt", names == ["a.txt"])
+        check("Documents has no error", pane.error == nil)
         check("Documents shows contents", FolderState(error: pane.error) == .contents)
-        check("status bar text", StatusBar.text(items: 1, selected: 0, free: 0) == "1 item, 0 selected, 0 bytes available")
+        let status: String = StatusBar.text(items: 1, selected: 0, free: 0)
+        check("status bar text", status == "1 item, 0 selected, 0 bytes available")
 
-        let missing = home.appendingPathComponent("Nope")
+        let missing: URL = home.appendingPathComponent("Nope")
         pane.navigate(to: missing)
-        check("missing folder sets notFound", pane.error == .notFound(missing.path) && pane.entries.isEmpty)
-        check("missing folder screen", FolderState(error: pane.error) == .unavailable("“Nope” could not be found"))
+        check("missing folder sets notFound", pane.error == FileOSError.notFound(missing.path))
+        check("missing folder has no entries", pane.entries.isEmpty)
+        let missingState: FolderState = FolderState(error: pane.error)
+        check("missing folder screen", missingState == .unavailable("“Nope” could not be found"))
 
         pane.back()
-        check("back returns to Documents", pane.url == docs.standardizedFileURL && pane.canGoForward)
+        check("back returns to Documents", pane.url == docs.standardizedFileURL)
+        check("forward is available", pane.canGoForward)
         pane.forward()
         check("forward goes to the missing folder", pane.url == missing.standardizedFileURL)
         pane.navigate(to: docs)
         pane.up()
-        check("up selects the folder it came from", pane.url == home.standardizedFileURL && pane.selection == [docs.path])
+        check("up goes to the parent", pane.url == home.standardizedFileURL)
+        check("up selects the folder it came from", pane.selection == Set([docs.path]))
 
-        check("path bar opens ~/Documents", model.go("~/Documents") && pane.url == docs.standardizedFileURL)
-        check("path bar opens a file's folder with it selected",
-              model.go("~/Documents/a.txt") && pane.selection == [docs.appendingPathComponent("a.txt").path])
-        check("path bar suggests a near miss",
-              !model.go("~/Documnts") && model.pathError?.suggestion == "~/Documents"
-                  && model.pathError.map { PathBar.missingMessage(name: $0.name, parent: $0.parent) }
-                  == "There's no folder called “Documnts” in \(home.lastPathComponent)")
+        let wentDocs: Bool = model.go("~/Documents")
+        check("path bar opens ~/Documents", wentDocs)
+        check("path bar is in Documents", pane.url == docs.standardizedFileURL)
+        let wentFile: Bool = model.go("~/Documents/a.txt")
+        check("path bar opens a file's folder", wentFile)
+        check("path bar selects the file", pane.selection == Set([aTxt.path]))
+
+        let wentTypo: Bool = model.go("~/Documnts")
+        check("path bar reports a missing folder", !wentTypo)
+        check("path bar suggests a near miss", model.pathError?.suggestion == "~/Documents")
+        let expected: String = "There's no folder called “Documnts” in \(home.lastPathComponent)"
+        var message: String = ""
+        if let err = model.pathError { message = PathBar.missingMessage(name: err.name, parent: err.parent) }
+        check("missing-folder message", message == expected)
+
         _ = model.go("~/New Stuff")
         model.createMissingFolder()
-        let created = home.appendingPathComponent("New Stuff")
-        check("Create This Folder makes and opens it", fm.fileExists(atPath: created.path) && pane.url == created.standardizedFileURL
-              && model.undo.canUndo && model.toasts.contains { $0.undoable })
+        let created: URL = home.appendingPathComponent("New Stuff")
+        check("Create This Folder makes it", fm.fileExists(atPath: created.path))
+        check("Create This Folder opens it", pane.url == created.standardizedFileURL)
+        check("Create This Folder is undoable", model.undo.canUndo)
+        check("Create This Folder shows an Undo toast", model.toasts.contains { (t: Toast) -> Bool in t.undoable })
 
         pane.filter = "zzz"
         pane.navigate(to: docs)
         check("filter clears on navigation", pane.filter.isEmpty)
         pane.filter = "A.T"
-        check("filter matches case-insensitively", pane.visibleEntries.map(\.name) == ["a.txt"])
+        let filtered: [String] = pane.visibleEntries.map { (e: Entry) -> String in e.name }
+        check("filter matches case-insensitively", filtered == ["a.txt"])
         pane.filter = ""
 
         // Live refresh: another process writes into the open folder.
@@ -69,32 +88,35 @@ enum SelfTest {
         var refreshed = false
         for _ in 0..<40 where !refreshed {
             try? await Task.sleep(for: .milliseconds(50))
-            refreshed = pane.entries.contains { $0.name == "b.txt" }
+            refreshed = pane.entries.contains { (e: Entry) -> Bool in e.name == "b.txt" }
         }
         check("live refresh picks up a new file", refreshed)
 
         model.toggleHidden()
         try? "h".write(to: docs.appendingPathComponent(".hidden"), atomically: true, encoding: .utf8)
         pane.reload()
-        check("show hidden lists dotfiles", pane.entries.contains { $0.name == ".hidden" })
+        check("show hidden lists dotfiles", pane.entries.contains { (e: Entry) -> Bool in e.name == ".hidden" })
         model.toggleHidden()
-        check("hidden state persisted", Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
-              .get("showHidden", default: true) == false)
+        let stateFile: URL = home.appendingPathComponent("Library/Application Support/FileOS/state.json")
+        let persisted: Bool = Store(url: stateFile).get("showHidden", default: true)
+        check("hidden state persisted", persisted == false)
 
         if getuid() != 0 {
-            let locked = home.appendingPathComponent("Locked")
+            let locked: URL = home.appendingPathComponent("Locked")
             try? fm.createDirectory(at: locked, withIntermediateDirectories: true)
             try? fm.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
             pane.navigate(to: locked)
-            check("unreadable folder shows the locked screen", FolderState(error: pane.error) == .locked(folder: "Locked"))
+            let lockedState: FolderState = FolderState(error: pane.error)
+            check("unreadable folder shows the locked screen", lockedState == .locked(folder: "Locked"))
             try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
             pane.reload()
             check("Try Again after access is granted lists it", pane.error == nil)
         }
 
-        for page in [Page.freeUpSpace, .installed, .agents, .aboutMac] {
+        let pages: [Page] = [.freeUpSpace, .installed, .agents, .aboutMac]
+        for page in pages {
             model.page = page
-            check("page \(page.title) hosts", host(model) )
+            check("page \(page.title) hosts", host(model))
         }
         model.page = .browser
         pane.navigate(to: docs)
@@ -111,6 +133,7 @@ enum SelfTest {
         let view = NSHostingView(rootView: MainWindow().environment(model))
         view.frame = NSRect(x: 0, y: 0, width: 1000, height: 640)
         view.layoutSubtreeIfNeeded()
-        return view.frame.width == 1000 && (!view.subviews.isEmpty || view.fittingSize != .zero)
+        let hasContent: Bool = !view.subviews.isEmpty || view.fittingSize != .zero
+        return view.frame.width == 1000 && hasContent
     }
 }
