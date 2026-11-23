@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Quartz
 import FileOSCore
 
 /// `FileOSApp --self-test`: a headless smoke run for CI. Prints one line per check, then
@@ -140,6 +141,8 @@ enum SelfTest {
         for (name, passed) in await paneChecks(model) { check(name, passed) }
         for (name, passed) in await queueChecks(model) { check(name, passed) }
         for (name, passed) in await searchChecks(model) { check(name, passed) }
+        for (name, passed) in await peekChecks(model) { check(name, passed) }
+        for (name, passed) in await markdownChecks(model) { check(name, passed) }
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -467,6 +470,124 @@ enum SelfTest {
         }
         r.append(("⌥Return shows the file in its folder", !model.showSearch && model.pane.url == FileOps.canonical(docs)
                     && model.pane.selection == Set([aTxt.path])))
+        return r
+    }
+
+    private static func key(_ code: UInt16, _ chars: String) -> NSEvent? {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                         characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)
+    }
+
+    private static func press(_ model: AppModel, _ code: UInt16, _ chars: String) -> Bool {
+        key(code, chars).map { (e: NSEvent) -> Bool in model.handlePaneKey(e) } ?? false
+    }
+
+    /// F6.1, F6.2, F5.14: Space, "1 of 2", ← →, Esc, the Info drawer, zip listing and Unpack.
+    static func peekChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let docs: URL = model.home.appendingPathComponent("Documents")
+        let aTxt: URL = docs.appendingPathComponent("a.txt")
+        let words: URL = docs.appendingPathComponent("words.txt")
+        try? "one two\nthree".write(to: words, atomically: true, encoding: .utf8)
+        let peek: PeekModel = model.peek
+        model.showSearch = false
+        model.showBatchRename = false
+        model.page = .browser
+        model.setLayout(.one)
+        model.setView(.list)
+        model.pane.navigate(to: docs)
+        model.pane.reload()
+        model.pane.selection = [aTxt.path, words.path]
+        r.append(("Space opens Peek", press(model, 49, " ") && peek.isShown))
+        r.append(("Peek steps through just the selection", peek.urls.count == 2 && peek.position == "1 of 2"))
+        r.append(("→ moves to the next item", press(model, 124, "\u{F703}") && peek.current == words
+                    && model.pane.selection.count == 2))
+        await peek.loading?.value
+        r.append(("Peek shows text", peek.content == .text("one two\nthree")))
+        let rows: [(label: String, value: String)] = InfoDrawer.rows(url: words, info: peek.info)
+        r.append(("Info counts words and lines", rows.contains { (row: (label: String, value: String)) -> Bool in
+            row.label == "Words" && row.value == "3" } && rows.contains { (row: (label: String, value: String)) -> Bool in
+            row.label == "Lines" && row.value == "2" }))
+        r.append(("Esc closes Peek", press(model, 53, "\u{1B}") && !peek.isShown))
+        model.pane.selection = [aTxt.path]
+        model.peekSelection()
+        let siblings: Int = model.pane.shownIDs.count
+        r.append(("one selected item steps through its folder", peek.urls.count == siblings && peek.current == aTxt))
+        r.append(("Space closes Peek", press(model, 49, " ") && !peek.isShown))
+        let wasShown: Bool = peek.showInfo
+        peek.toggleInfo()
+        r.append(("the Info drawer is remembered", PeekModel(store: model.store).showInfo == !wasShown))
+        peek.toggleInfo()
+
+        // A zip made by the system tool, listed in Peek and unpacked next to itself.
+        let src: URL = model.home.appendingPathComponent("ZipSource")
+        try? FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
+        try? "zipped".write(to: src.appendingPathComponent("z.txt"), atomically: true, encoding: .utf8)
+        let zip: URL = docs.appendingPathComponent("Archive.zip")
+        _ = try? await ProcessRunner().run("/usr/bin/ditto", ["-c", "-k", src.path, zip.path], timeout: 30)
+        peek.show([zip])
+        await peek.loading?.value
+        var listed = false
+        if case let .zip(entries, encrypted) = peek.content { listed = entries.contains("z.txt") && !encrypted }
+        r.append(("Peek lists a zip", listed))
+        peek.close()
+        await model.unpack(zip)
+        let unpacked: URL = docs.appendingPathComponent("Archive/z.txt")
+        r.append(("Unpack makes a folder next to the zip", exists(unpacked)))
+        r.append(("Unpack toast", hasToast(model, "Unpacked “Archive.zip” into “Archive”")))
+        await model.unpack(zip)
+        r.append(("a second Unpack picks a new name", exists(docs.appendingPathComponent("Archive 2/z.txt"))))
+        await model.undoLast()
+        await model.undoLast()
+        r.append(("Unpack is undoable", !exists(docs.appendingPathComponent("Archive")) && exists(zip)))
+
+        // A file Quick Look previews builds QLPreviewView inside the overlay.
+        let blob: URL = docs.appendingPathComponent("blob.bin")
+        try? Data([0, 1, 2]).write(to: blob)
+        peek.show([blob])
+        await peek.loading?.value
+        let views: [NSView] = hostedViews(model)
+        r.append(("Peek hosts a Quick Look view", peek.content == .quickLook
+                    && views.contains { (v: NSView) -> Bool in v is QLPreviewView }))
+        peek.close()
+        return r
+    }
+
+    /// F6.3: a .md opens as a page; Save is undoable; leaving with edits asks first.
+    static func markdownChecks(_ model: AppModel) async -> [(String, Bool)] {
+        var r: [(String, Bool)] = []
+        let readme: URL = model.home.appendingPathComponent("Documents/readme.md")
+        let original: String = "# Title\n\n## Part\nHello"
+        try? original.write(to: readme, atomically: true, encoding: .utf8)
+        func onDisk() -> String { (try? String(contentsOf: readme, encoding: .utf8)) ?? "" }
+        await model.openMarkdown(readme)
+        guard let doc = model.markdown else {
+            r.append(("a .md opens as a page", false))
+            return r
+        }
+        r.append(("a .md opens as a page", model.page == .markdown && doc.text == original))
+        let outline: [String] = Markdown.outline(doc.text).map { (h: (level: Int, text: String, id: String)) -> String in h.id }
+        r.append(("On this page lists the headings", outline == ["title", "part"]))
+        doc.mode = .edit
+        r.append(("Edit mode builds a text editor", hostedViews(model).contains { (v: NSView) -> Bool in v is NSTextView }))
+        doc.text = original + "\nMore"
+        r.append(("typing shows the Edited bar", doc.isEdited))
+        doc.revert()
+        r.append(("Revert restores the saved text", !doc.isEdited && doc.text == original))
+        doc.text = original + "\nMore"
+        model.saveMarkdown()
+        r.append(("Save writes the file", onDisk() == original + "\nMore" && !doc.isEdited))
+        r.append(("Save toast", hasToast(model, "Saved “readme.md”")))
+        await model.undoLast()
+        r.append(("undoing Save restores the previous text", onDisk() == original && doc.text == original))
+        doc.text = "changed"
+        model.page = .browser
+        model.pageChanged(from: .markdown, to: .browser)
+        r.append(("leaving with edits asks first", model.page == .markdown && model.showLeaveAlert
+                    && AppModel.leaveTitle(doc.name) == "Save the changes to “readme.md”?"))
+        model.showLeaveAlert = false
+        model.finishLeaving(save: false)
+        r.append(("Don't Save leaves without writing", model.page == .browser && model.markdown == nil && onDisk() == original))
         return r
     }
 

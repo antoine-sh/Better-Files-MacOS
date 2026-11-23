@@ -91,6 +91,9 @@ private struct FileMenuCommands: Commands {
     }
 
     @ViewBuilder private var itemCommands: some View {
+        // Space also peeks (from the pane's key monitor); F3 is the commander View key (F5.12).
+        MenuItem(title: "Peek", id: "viewF3", model: model, disabled: targets.isEmpty, action: { peek() })
+        MenuItem(title: "Quick Look", id: "quickLook", model: model, action: { model.quickLook() })
         MenuItem(title: "Rename…", id: "renameF2", model: model, disabled: targets.isEmpty, action: { rename() })
         MenuItem(title: "Duplicate", id: "duplicate", model: model, disabled: targets.isEmpty, action: { model.duplicate(model.targets) })
         MenuItem(title: "Make Alias", id: "makeAlias", model: model, disabled: targets.isEmpty, action: { model.makeAlias(model.targets) })
@@ -113,6 +116,10 @@ private struct FileMenuCommands: Commands {
     }
 
     private func rename() { model.beginRename() }
+
+    private func peek() {
+        if model.peek.isShown { model.peek.close() } else { model.peekSelection() }
+    }
 
     /// F8 while typing in a field does nothing (only ⌘⌫ has a text-editing meaning).
     private func trashF8() {
@@ -189,7 +196,6 @@ private struct ViewMenuCommands: Commands {
         MenuItem(title: "as List", id: "viewList", model: model, action: { model.setView(.list) })
         MenuItem(title: "as Icons", id: "viewIcons", model: model, action: { model.setView(.icons) })
         MenuItem(title: "as Columns", id: "viewColumns", model: model, action: { model.setView(.columns) })
-        MenuItem(title: "Next View", id: "viewF3", model: model, action: { nextView() })
     }
 
     @ViewBuilder private var arrangeCommands: some View {
@@ -213,12 +219,6 @@ private struct ViewMenuCommands: Commands {
         MenuItem(title: model.showHidden ? "Hide Hidden Files" : "Show Hidden Files", id: "toggleHidden", model: model,
                  action: { model.toggleHidden() })
         MenuItem(title: "Filter", id: "filter", model: model, action: { filter() })
-    }
-
-    private func nextView() {
-        let all: [ViewMode] = ViewMode.allCases
-        let i: Int = all.firstIndex(of: model.pane.view) ?? 0
-        model.setView(all[(i + 1) % all.count])
     }
 
     private func filter() {

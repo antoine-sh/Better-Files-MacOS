@@ -6,6 +6,8 @@ import FileOSCore
 
 enum Page: Hashable, Sendable {
     case browser, home, bookmarks, freeUpSpace, installed, agents, workspace(UUID), aboutMac
+    /// The Markdown page for `AppModel.markdown` (F6.3).
+    case markdown
 
     var title: String {
         switch self {
@@ -17,6 +19,7 @@ enum Page: Hashable, Sendable {
         case .agents: return "AI Agents"
         case .workspace: return "Workspace"
         case .aboutMac: return "About This Mac"
+        case .markdown: return "Markdown"
         }
     }
 }
@@ -51,6 +54,12 @@ final class AppModel {
     /// ⌘K (F7).
     let search: SearchModel
     var showSearch = false
+    /// Space (F6.1).
+    let peek: PeekModel
+    /// The open Markdown page, and where the user was going when "Save the changes…?" was asked.
+    var markdown: MarkdownDocument?
+    var leavingTo: Page?
+    var showLeaveAlert = false
     var showSaveLayout = false
 
     // Dialogs (see FileDialogs)
@@ -92,6 +101,7 @@ final class AppModel {
         search = SearchModel()
         let store = Store(url: home.appendingPathComponent("Library/Application Support/FileOS/state.json"))
         self.store = store
+        peek = PeekModel(store: store)
         let hidden = store.get("showHidden", default: false)
         showHidden = hidden
         favorites = store.get("favorites", default: [String]()).map { (p: String) -> URL in FileOps.canonical(URL(fileURLWithPath: p)) }
@@ -105,7 +115,10 @@ final class AppModel {
         panes = [pane]
         refreshVolumes()
         // A clash question must be answerable: close ⌘K so the sheet can show.
-        transfers.willAsk = { [weak self] in self?.showSearch = false }
+        transfers.willAsk = { [weak self] in
+            self?.showSearch = false
+            self?.peek.close()
+        }
     }
 
     var pane: PaneModel { panes[activePane] }
@@ -126,14 +139,10 @@ final class AppModel {
         pane.navigate(to: url)
     }
 
-    /// ⌘↓ / double-click: folders open in place, files open in their default app.
+    /// ⌘↓ / double-click: folders open in place, Markdown as a page, files in their default app.
     func openSelection(_ ids: Set<Entry.ID>? = nil) {
         let urls: [URL] = (ids ?? pane.selection).sorted().map { (p: String) -> URL in URL(fileURLWithPath: p) }
-        if urls.count == 1, let folder = urls.first, Self.isBrowsableFolder(folder) {
-            page = .browser
-            pane.navigate(to: folder)
-            return
-        }
+        if urls.count == 1, let only = urls.first { return openItem(only) }
         for url in urls { _ = NSWorkspace.shared.open(url) }
     }
 

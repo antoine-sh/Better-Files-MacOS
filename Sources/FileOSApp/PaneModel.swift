@@ -117,6 +117,11 @@ final class PaneModel {
     /// Selected items currently on screen (the filter or a collapsed folder can hide some):
     /// what menu commands like Move to Trash act on.
     var visibleSelectedURLs: [URL] {
+        shownIDs.filter { (id: String) -> Bool in selection.contains(id) }.map { (p: String) -> URL in URL(fileURLWithPath: p) }
+    }
+
+    /// Every item on screen, in display order (all columns in column view).
+    var shownIDs: [String] {
         var shown: [String]
         if view == .columns {
             shown = []
@@ -126,7 +131,7 @@ final class PaneModel {
         } else {
             shown = rows.map { (r: Row) -> String in r.id }
         }
-        return shown.filter { (id: String) -> Bool in selection.contains(id) }.map { (p: String) -> URL in URL(fileURLWithPath: p) }
+        return shown
     }
 
     /// Selected items the filter still shows, for the status bar.

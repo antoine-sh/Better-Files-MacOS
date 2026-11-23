@@ -14,7 +14,9 @@ struct MainWindow: View {
         .overlay(alignment: .bottom) { ToastsView() }
         .overlay(alignment: .bottomTrailing) { TransferQueueView(queue: model.transfers) }
         .overlay { SearchOverlay() }
+        .overlay { PeekOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
+        .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
     }
 
     private var sidebar: some View {
@@ -24,6 +26,8 @@ struct MainWindow: View {
     @ViewBuilder private var detail: some View {
         if model.page == .browser {
             BrowserView(pane: model.pane)
+        } else if model.page == .markdown, let doc = model.markdown {
+            MarkdownPage(doc: doc)
         } else {
             PlaceholderPage(title: model.page.title)
         }
@@ -197,6 +201,11 @@ struct FileDialogs: ViewModifier {
             } message: {
                 Text(AppModel.emptyTrashMessage(count: model.emptyTrashSummary.count, bytes: model.emptyTrashSummary.bytes))
             }
+            .alert(leaveTitle, isPresented: $model.showLeaveAlert) {
+                Button("Save", action: { model.finishLeaving(save: true) })
+                Button("Don't Save", role: .destructive, action: { model.finishLeaving(save: false) })
+                Button("Cancel", role: .cancel, action: { model.leavingTo = nil })
+            }
             .alert(extensionTitle, isPresented: $model.showExtensionAlert) {
                 Button(keepTitle, action: { model.resolveExtension(keep: true) })
                 Button(useTitle, action: { model.resolveExtension(keep: false) })
@@ -208,6 +217,7 @@ struct FileDialogs: ViewModifier {
         layoutName = ""
     }
 
+    private var leaveTitle: String { AppModel.leaveTitle(model.markdown?.name ?? "") }
     private var extensionTitle: String { model.extensionPrompt.map { (p: ExtensionPrompt) -> String in AppModel.extensionTitle(p) } ?? "" }
     private var keepTitle: String { "Keep \(model.extensionPrompt?.from ?? "")" }
     private var useTitle: String { "Use \(model.extensionPrompt?.to ?? "")" }

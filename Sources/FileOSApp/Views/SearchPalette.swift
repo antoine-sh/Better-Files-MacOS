@@ -120,7 +120,7 @@ extension AppModel {
         showSearch = false
         switch row {
         case .hit(let h):
-            if Self.isBrowsableFolder(h.url) { open(h.url) } else { _ = NSWorkspace.shared.open(h.url) }
+            openItem(h.url)
         case .named(let n):
             switch n.kind {
             case .workspace:
@@ -206,7 +206,7 @@ struct SearchPalette: View {
             Text("\(search.rows.count) results").font(.caption).foregroundStyle(.secondary)
             Spacer()
             Button("Cancel", action: { model.showSearch = false }).keyboardShortcut(.cancelAction)
-            Button("Peek", action: { peek() }).keyboardShortcut("y", modifiers: .command)
+            Button("Peek", action: { peek() }).help("Peek (Space); ⌘Y opens Quick Look")
             Button("Show in Folder", action: { reveal() }).keyboardShortcut(.return, modifiers: .option)
             Button("Open", action: { open() }).keyboardShortcut(.defaultAction)
         }
@@ -229,7 +229,7 @@ struct SearchPalette: View {
     }
 
     private func peek() {
-        if case .hit(let h) = search.selectedRow { Peek.show([h.url]) }
+        if case .hit(let h) = search.selectedRow { model.peek.show([h.url]) }
     }
 }
 
@@ -279,7 +279,7 @@ private struct SearchResults: View {
 
     private func peek() -> KeyPress.Result {
         guard case .hit(let h) = search.selectedRow else { return .ignored }
-        Peek.show([h.url])
+        model.peek.show([h.url])
         return .handled
     }
 }

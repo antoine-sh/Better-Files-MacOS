@@ -35,15 +35,24 @@ extension AppModel {
         pathError = nil
     }
 
-    /// Tab with no modifiers (F8.1), seen by a local key monitor because list tables keep Tab for themselves.
+    /// Tab (F8.1) and Space (Peek, F6.1) with no modifiers, seen by a local key monitor because list tables
+    /// keep those keys for themselves; while Peek is up it gets every key first.
     /// Left alone while typing in a field, in ⌘K, renaming, or in a sheet.
     func handlePaneKey(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown, event.keyCode == 48 else { return false } // kVK_Tab
+        guard event.type == .keyDown else { return false }
+        if peek.isShown { return handlePeekKey(event) }
+        guard event.keyCode == 48 || event.keyCode == 49 else { return false } // kVK_Tab, kVK_Space
         let mods: NSEvent.ModifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock, .numericPad, .function])
-        guard mods.isEmpty, panes.count > 1, page == .browser, !showSearch, !editingPath, !showBatchRename,
+        guard mods.isEmpty, page == .browser, !showSearch, !editingPath, !showBatchRename,
               clashPrompt == nil, pane.renaming == nil, !TextEditing.isActive,
               !(event.window?.firstResponder is NSText), event.window?.sheetParent == nil else { return false }
+        if event.keyCode == 49 {
+            guard !targets.isEmpty else { return false }
+            peekSelection()
+            return true
+        }
+        guard panes.count > 1 else { return false }
         switchPane()
         return true
     }
