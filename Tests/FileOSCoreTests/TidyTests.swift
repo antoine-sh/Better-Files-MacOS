@@ -2,15 +2,17 @@ import XCTest
 @testable import FileOSCore
 
 final class TidyTests: XCTestCase {
-    let hourAgo = Date().addingTimeInterval(-3600)
+    /// Files made by a test were just created, so "now" is an hour on: they count as added an hour ago.
+    let now = Date().addingTimeInterval(3600)
+    let hourAgo = Date()
 
     func testLeavesDownloadingAndJustAddedFiles() throws {
         let dir = makeTempDir()
-        touch(dir, "new.pdf", modified: Date().addingTimeInterval(-30))
+        touch(dir, "new.pdf", modified: now.addingTimeInterval(-30))
         touch(dir, "movie.mp4.crdownload", modified: hourAgo)
         touch(dir, "old.pdf", modified: hourAgo)
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("Folder"), withIntermediateDirectories: true)
-        let plan = try Tidy.plan(dir, now: Date())
+        let plan = try Tidy.plan(dir, now: now)
         let left = Dictionary(uniqueKeysWithValues: plan.left.map { ($0.name, $0.reason) })
         XCTAssertEqual(left, ["new.pdf": "Added in the last 2 minutes", "movie.mp4.crdownload": "Still downloading"])
         XCTAssertEqual(plan.moves.map { $0.from.lastPathComponent }, ["old.pdf"])
@@ -18,11 +20,49 @@ final class TidyTests: XCTestCase {
         XCTAssertEqual(plan.byKind[.pdfs]?.count, 1)
     }
 
+    func testFreshlyAddedFileWithOldModificationDateIsLeft() throws {
+        let dir = makeTempDir()
+        let url = touch(dir, "download.pdf", modified: Date().addingTimeInterval(-30 * 86_400))
+        let created = try FileManager.default.attributesOfItem(atPath: url.path)[.creationDate] as? Date
+        try XCTSkipUnless(created.map { Date().timeIntervalSince($0) < 60 } == true, "no creation date on this file system")
+        let plan = try Tidy.plan(dir, now: Date())
+        XCTAssertEqual(plan.left.first?.reason, "Added in the last 2 minutes")
+        XCTAssertTrue(plan.moves.isEmpty)
+    }
+
+    func testFailedApplyPutsEverythingBack() throws {
+        let dir = makeTempDir()
+        touch(dir, "a.pdf", modified: hourAgo)
+        touch(dir, "b.jpg", modified: hourAgo)
+        let plan = try Tidy.plan(dir, now: now)
+        touch(dir, "Images", "a file where the folder should go")
+        XCTAssertThrowsError(try Tidy.apply(plan, skip: [], trashDir: nil))
+        XCTAssertTrue(exists(dir.appendingPathComponent("a.pdf")))
+        XCTAssertTrue(exists(dir.appendingPathComponent("b.jpg")))
+        XCTAssertFalse(exists(dir.appendingPathComponent("PDFs")), "the folder it made is removed")
+    }
+
+    func testUndoRemovesCreatedFolderHoldingOnlyDSStore() async throws {
+        let dir = makeTempDir()
+        touch(dir, "a.pdf", modified: hourAgo)
+        let (_, undo) = try Tidy.apply(try Tidy.plan(dir, now: now), skip: [], trashDir: nil)
+        touch(dir, "PDFs/.DS_Store")
+        _ = await undo()
+        XCTAssertFalse(exists(dir.appendingPathComponent("PDFs")))
+    }
+
+    func testInstallerNeedsAWordBreakAfterTheAppName() {
+        XCTAssertNil(Tidy.installerApp("ArcGIS.dmg", ["Arc"]))
+        XCTAssertEqual(Tidy.installerApp("Arc-1.2.dmg", ["Arc"]), "Arc")
+        XCTAssertEqual(Tidy.installerApp("googlechrome.dmg", ["Google Chrome"]), "Google Chrome")
+        XCTAssertEqual(Tidy.installerApp("Firefox 128.0.dmg", ["Firefox"]), "Firefox")
+    }
+
     func testClashIsNumberedAndExistingFolderReused() throws {
         let dir = makeTempDir()
         touch(dir, "PDFs/report.pdf", "old")
         touch(dir, "report.pdf", "new", modified: hourAgo)
-        let plan = try Tidy.plan(dir, now: Date())
+        let plan = try Tidy.plan(dir, now: now)
         XCTAssertEqual(plan.moves.first?.to.lastPathComponent, "report 2.pdf")
         let (moved, _) = try Tidy.apply(plan, skip: [], trashDir: nil)
         XCTAssertEqual(moved, 1)
@@ -37,7 +77,7 @@ final class TidyTests: XCTestCase {
             touch(dir, name, modified: hourAgo)
         }
         touch(dir, "Documents/keep.txt")
-        let plan = try Tidy.plan(dir, now: Date(), installersToTrash: true)
+        let plan = try Tidy.plan(dir, now: now, installersToTrash: true)
         XCTAssertEqual(plan.byKind[.screenshots]?.destination.lastPathComponent, "Images")
         let (moved, undo) = try Tidy.apply(plan, skip: [.archives], trashDir: trash)
         XCTAssertEqual(moved, 5)
@@ -54,7 +94,7 @@ final class TidyTests: XCTestCase {
     func testUndoKeepsCreatedFolderThatGainedFiles() async throws {
         let dir = makeTempDir()
         touch(dir, "a.pdf", modified: hourAgo)
-        let (_, undo) = try Tidy.apply(try Tidy.plan(dir, now: Date()), skip: [], trashDir: nil)
+        let (_, undo) = try Tidy.apply(try Tidy.plan(dir, now: now), skip: [], trashDir: nil)
         touch(dir, "PDFs/later.pdf")
         _ = await undo()
         XCTAssertTrue(exists(dir.appendingPathComponent("a.pdf")))
@@ -65,7 +105,7 @@ final class TidyTests: XCTestCase {
         let dir = makeTempDir()
         let shots = makeTempDir().appendingPathComponent("Screenshots")
         touch(dir, "Screenshot 1.png", modified: hourAgo)
-        let plan = try Tidy.plan(dir, now: Date(), screenshotsToPictures: shots)
+        let plan = try Tidy.plan(dir, now: now, screenshotsToPictures: shots)
         XCTAssertEqual(plan.moves.first?.to.deletingLastPathComponent().path, shots.path)
     }
 
@@ -108,5 +148,6 @@ final class TidyTests: XCTestCase {
         XCTAssertEqual(s.older.map(\.name), ["ancient.zip"])
         XCTAssertFalse(Tidy.isLikelyCopyName("copy.txt"))
         XCTAssertFalse(Tidy.isLikelyCopyName("Report (final).pdf"))
+        XCTAssertFalse(Tidy.isLikelyCopyName("Photo (2019).jpg"))
     }
 }

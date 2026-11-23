@@ -14,7 +14,9 @@ enum SelfTest {
         try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         try? "a".write(to: docs.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         Pasteboard.board = NSPasteboard(name: NSPasteboard.Name("com.fileos.selftest.\(UUID().uuidString)"))
-        return AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
+        let model = AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
+        model.cleanApplications = [home.appendingPathComponent("Applications")] // not the runner's real apps
+        return model
     }
 
     static func run(model: AppModel) async -> Bool {
@@ -640,12 +642,14 @@ enum SelfTest {
         check("Downloads groups by Smart Downloads dates", dateTitles.first == "Today")
         model.setGroup(.kind)
         let kindTitles: [String] = model.pane.sections.map { (s: RowSection) -> String in s.title }
-        check("Downloads groups by kind, biggest first", kindTitles.first == "Documents" || kindTitles.first == "PDFs")
+        check("Downloads groups by kind, biggest first", kindTitles == ["PDFs", "Images", "Documents"])
         model.setGroup(.none)
         model.setView(.list)
         if !model.showInsights { model.toggleInsights() }
         check("Insights replaces the preview pane", model.showInsights && !model.showPreview)
-        check("Insights builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSTableView })
+        model.installedAppNames = nil
+        let loadedApps: Bool = await hostAndWait(model) { () -> Bool in model.installedAppNames != nil }
+        check("Insights loads the installed apps when it opens", loadedApps)
         model.toggleInsights()
 
         let invoices: URL = home.appendingPathComponent("Documents/Invoices")
@@ -674,7 +678,17 @@ enum SelfTest {
         try? blob.write(to: spare, atomically: true, encoding: .utf8)
         try? fm.setAttributes([.modificationDate: hourAgo, .creationDate: hourAgo.addingTimeInterval(-86_400)], ofItemAtPath: kept.path)
         try? fm.setAttributes([.modificationDate: hourAgo, .creationDate: hourAgo], ofItemAtPath: spare.path)
-        await model.clean.scan(home: home, applications: [home.appendingPathComponent("Applications")])
+        let apps: [URL]? = model.cleanApplications
+        let first = Task { await model.clean.scan(home: home, applications: apps) }
+        for _ in 0..<200 where !model.clean.looking { await Task.yield() }
+        model.clean.cancel()
+        await first.value
+        check("a cancelled scan asks for another", model.clean.needsScan && !model.clean.looking)
+        let before: Int = model.clean.scansStarted
+        model.page = .freeUpSpace
+        let rescanned: Bool = await hostAndWait(model) { () -> Bool in model.clean.scansStarted > before && !model.clean.looking }
+        check("Free Up Space looks again when it opens", rescanned)
+        model.page = .browser
         check("Free Up Space shows nine cards", model.clean.cards.count == 9 && !model.clean.looking)
         let dupes: [CleanItem] = model.clean.card(.duplicates)?.items ?? []
         check("the Downloads duplicate is ticked", dupes.map { (i: CleanItem) -> String in i.url.lastPathComponent } == ["big.bin"]
@@ -686,9 +700,27 @@ enum SelfTest {
         check("the moved item leaves its card", model.clean.ticked.isEmpty)
         await model.undoLast()
         check("undoing Smart Clean restores the spare", exists(spare))
-        model.page = .freeUpSpace
-        check("Free Up Space page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
-        model.page = .browser
+    }
+
+    /// Hosts MainWindow like `hostedViews`, but keeps it up (up to 5 s) until `done` holds, so `.onAppear`
+    /// and `.task` work runs.
+    private static func hostAndWait(_ model: AppModel, _ done: () -> Bool) async -> Bool {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: MainWindow().environment(model))
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 1000, height: 640)
+        host.layoutSubtreeIfNeeded()
+        var ok: Bool = done()
+        for _ in 0..<100 where !ok {
+            try? await Task.sleep(for: .milliseconds(50))
+            host.layoutSubtreeIfNeeded()
+            ok = done()
+        }
+        window.contentView = nil
+        return ok
     }
 
     private static func tableCount(_ model: AppModel) -> Int {

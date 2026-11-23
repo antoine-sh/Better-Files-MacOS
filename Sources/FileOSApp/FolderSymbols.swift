@@ -47,7 +47,9 @@ extension AppModel {
         let url: URL = entry.url
         let home: URL = self.home
         let symbol: String = await Task.detached(priority: .utility) { () -> String in
-            FolderSymbol.automatic(for: url, home: home)
+            // Packages such as .app show their own icon ("" here), not a folder symbol.
+            if (try? url.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true { return "" }
+            return FolderSymbol.automatic(for: url, home: home)
         }.value
         if autoSymbols.count > 5_000 { autoSymbols.removeAll() } // stale versions pile up in long sessions
         autoSymbols[cache] = symbol
@@ -109,11 +111,20 @@ struct FolderGlyph: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        Image(systemName: model.folderSymbol(entry))
-            .font(.system(size: size))
-            .foregroundStyle(model.folderColor(entry.url) ?? Color.accentColor)
+        glyph
             .task(id: entry) { await model.loadSymbol(entry) }
             .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var glyph: some View {
+        let symbol: String = model.folderSymbol(entry)
+        if symbol.isEmpty {
+            FileIcon(url: entry.url, side: size)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: size))
+                .foregroundStyle(model.folderColor(entry.url) ?? Color.accentColor)
+        }
     }
 }
 

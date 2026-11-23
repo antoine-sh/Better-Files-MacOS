@@ -12,6 +12,16 @@ public struct TidyPlan: Sendable {
     public func count(skipping skip: Set<FileKind>) -> Int { moves.filter { !skip.contains($0.kind) }.count }
 }
 
+/// A Tidy that failed and could not put everything back.
+public struct TidyError: Error, LocalizedError {
+    public let reason: String
+    public let notRestored: [(url: URL, reason: String)]
+    public var errorDescription: String? {
+        let names = notRestored.map { "“\($0.url.lastPathComponent)”" }.joined(separator: ", ")
+        return "\(reason). Couldn't put back \(names)"
+    }
+}
+
 public enum Tidy {
     public static let stillDownloading = "Still downloading"
     public static let justAdded = "Added in the last 2 minutes"
@@ -24,7 +34,8 @@ public enum Tidy {
         let entries = try FileOps.listDirectory(dir).sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         for entry in entries where !entry.isDirectory && !entry.isSymlink {
             if isDownloading(entry.name) { plan.left.append((entry.name, stillDownloading)); continue }
-            if now.timeIntervalSince(entry.modified) < 120 { plan.left.append((entry.name, justAdded)); continue }
+            // A download keeps the server's date as its modification date; the date it arrived is `added`.
+            if now.timeIntervalSince(max(entry.modified, entry.added)) < 120 { plan.left.append((entry.name, justAdded)); continue }
             let kind = entry.kind ?? .other
             let folder: URL
             switch kind {
@@ -63,8 +74,9 @@ public enum Tidy {
                 moves.append(Move(from: m.from, to: to))
             }
         } catch {
-            _ = undo(moves, created)
-            throw error
+            let rollback = undo(moves, created)
+            if rollback.failed.isEmpty { throw error }
+            throw TidyError(reason: error.localizedDescription, notRestored: rollback.failed)
         }
         let done = moves, folders = created
         return (moves.count, { undo(done, folders) })
@@ -73,7 +85,9 @@ public enum Tidy {
     private static func undo(_ moves: [Move], _ created: [URL]) -> RestoreResult {
         let result = FileOps.restore(moves)
         for folder in created.reversed() {
-            if let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path), names.isEmpty {
+            // Finder may have dropped a .DS_Store in it; that alone still counts as empty.
+            if let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path),
+               names.allSatisfy({ $0 == ".DS_Store" }) {
                 try? FileManager.default.removeItem(at: folder)
             }
         }
@@ -126,7 +140,8 @@ public enum Tidy {
         if base.hasSuffix(")"), let open = base.lastIndex(of: "("), open > base.startIndex,
            base[base.index(before: open)] == " " {
             let digits = base[base.index(after: open)..<base.index(before: base.endIndex)]
-            if !digits.isEmpty && digits.allSatisfy(\.isASCII) && digits.allSatisfy(\.isNumber) { return true }
+            // Up to 3 digits: "Photo (2019).jpg" is a year, not a copy.
+            if (1...3).contains(digits.count) && digits.allSatisfy({ $0.isASCII && $0.isNumber }) { return true }
         }
         if base.hasSuffix(" copy") && base.count > 5 { return true }
         if let range = base.range(of: " copy ", options: .backwards), range.lowerBound > base.startIndex {
@@ -138,13 +153,22 @@ public enum Tidy {
 
     /// The installed app an installer is for: "Firefox 128.0.dmg" and "googlechrome.dmg" match "Firefox"
     /// and "Google Chrome" by their letters.
+    /// The app name must end at a word break: "Arc" doesn't match "ArcGIS.dmg".
     public static func installerApp(_ name: String, _ apps: Set<String>) -> String? {
-        func letters(_ s: String) -> String { String(s.lowercased().filter { $0.isLetter }) }
-        let installer = letters(splitExtension(name).base)
+        let installer = Array(splitExtension(name).base.lowercased())
         // Longest first, so "Google Chrome Canary" beats "Google Chrome".
         return apps.sorted { $0.count > $1.count }.first { app in
-            let key = letters(app)
-            return key.count >= 3 && installer.hasPrefix(key)
+            let key = Array(app.lowercased().filter { $0.isLetter })
+            guard key.count >= 3 else { return false }
+            var matched = 0, i = 0
+            while i < installer.count, matched < key.count {
+                if installer[i].isLetter {
+                    if installer[i] != key[matched] { return false }
+                    matched += 1
+                }
+                i += 1
+            }
+            return matched == key.count && (i == installer.count || !installer[i].isLetter)
         }
     }
 }

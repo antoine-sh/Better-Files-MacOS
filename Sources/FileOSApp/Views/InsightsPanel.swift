@@ -5,8 +5,8 @@ import FileOSCore
 struct InsightsPanel: View {
     let pane: PaneModel
     @Environment(AppModel.self) private var model
-    @State private var installedApps: Set<String> = []
     @State private var confirmInstallers = false
+    private var installedApps: Set<String> { model.installedAppNames ?? [] }
 
     private var groups: [(kind: FileKind?, items: [Entry], bytes: Int64)] { Tidy.groupByKind(pane.entries) }
     private var suggestions: (installers: [Entry], duplicates: [Entry], older: [Entry]) {
@@ -24,15 +24,22 @@ struct InsightsPanel: View {
             }
             .padding(12)
         }
-        .task { installedApps = await Self.loadInstalledApps(home: model.home) }
+        .task { await loadInstalledApps() }
         .confirmationDialog(installersTitle, isPresented: $confirmInstallers) {
             Button("Move to Trash", role: .destructive, action: { trashInstallers() })
             Button("Cancel", role: .cancel, action: {})
         }
     }
 
-    nonisolated private static func loadInstalledApps(home: URL) async -> Set<String> {
-        Set(SmartClean.installedApps(in: SmartClean.applicationDirs(home: home)).keys)
+    /// Once per session; read off the main actor.
+    private func loadInstalledApps() async {
+        guard model.installedAppNames == nil else { return }
+        let dirs: [URL] = model.cleanApplications ?? SmartClean.applicationDirs(home: model.home)
+        model.installedAppNames = await Self.appNames(dirs)
+    }
+
+    nonisolated private static func appNames(_ dirs: [URL]) async -> Set<String> {
+        Set(SmartClean.installedApps(in: dirs).keys)
     }
 
     @ViewBuilder private var suggestionList: some View {

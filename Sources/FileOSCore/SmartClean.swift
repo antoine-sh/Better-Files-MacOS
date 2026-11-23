@@ -61,6 +61,13 @@ public struct CleanCard: Identifiable, Sendable {
         // "Your call" items are never ticked for the user.
         self.items = group == .yourCall ? items.map { var i = $0; i.ticked = false; return i } : items
     }
+
+    /// Duplicates' "Tick These Too": ticks the spares left unticked. Kept copies are never items, so one copy
+    /// of each set always stays.
+    public mutating func tickTheseToo() {
+        guard id == .duplicates else { return }
+        for i in items.indices { items[i].ticked = true }
+    }
 }
 
 public enum SmartClean {
@@ -93,39 +100,50 @@ public enum SmartClean {
                             applications: [URL]? = nil) -> [CleanCard] {
         let apps = installedApps(in: applications ?? applicationDirs(home: home))
         let roots = ["Downloads", "Desktop", "Documents", "Movies"].map { home.appendingPathComponent($0) }
-        let files = walk(roots, maxDepth: 4)
+        let found = walk(roots, maxDepth: 4)
+        let downloads = home.appendingPathComponent("Downloads").path + "/"
+        let desktop = home.appendingPathComponent("Desktop").path + "/"
+        let documents = home.appendingPathComponent("Documents").path + "/"
+        let inDownloadsOrDesktop = { (f: FileRecord) -> Bool in f.url.path.hasPrefix(downloads) || f.url.path.hasPrefix(desktop) }
+        let candidates = found.files.filter { $0.size >= 1024 && (inDownloadsOrDesktop($0) || $0.url.path.hasPrefix(documents)) }
+        let dupes = duplicates(candidates, inDownloadsOrDesktop: inDownloadsOrDesktop)
         var seen: Set<String> = []
         var cards: [CleanCard] = []
         for id in CardID.allCases {
             if Task.isCancelled { break }
-            let items = card(id, home: home, now: now, files: files, apps: apps, isAppRunning: isAppRunning)
-                .filter { seen.insert($0.url.path).inserted }
+            let all = id == .duplicates ? dupes.items
+                : card(id, home: home, now: now, found: found, apps: apps, isAppRunning: isAppRunning, inDownloadsOrDesktop: inDownloadsOrDesktop)
+            let items = all.filter { seen.insert($0.url.path).inserted }
             cards.append(CleanCard(id: id, items: items))
+            // The copy each duplicate set keeps is never offered by a later card.
+            if id == .duplicates { seen.formUnion(dupes.kept.map(\.path)) }
         }
         return cards
     }
 
-    private static func card(_ id: CardID, home: URL, now: Date, files: [FileRecord], apps: [String: URL],
-                             isAppRunning: (String) -> Bool) -> [CleanItem] {
-        let downloads = home.appendingPathComponent("Downloads").path + "/"
-        let desktop = home.appendingPathComponent("Desktop").path + "/"
-        func inDownloadsOrDesktop(_ f: FileRecord) -> Bool { f.url.path.hasPrefix(downloads) || f.url.path.hasPrefix(desktop) }
+    private static func card(_ id: CardID, home: URL, now: Date, found: (files: [FileRecord], nodeModules: [FileRecord]),
+                             apps: [String: URL], isAppRunning: (String) -> Bool,
+                             inDownloadsOrDesktop: (FileRecord) -> Bool) -> [CleanItem] {
+        let files = found.files
         switch id {
         case .devCaches:
             let xcodeRunning = isAppRunning("Xcode")
-            return devCachePaths.compactMap { rel in
+            let caches: [CleanItem] = devCachePaths.compactMap { rel in
                 if xcodeRunning && rel.hasPrefix("Library/Developer") { return nil }
                 let url = home.appendingPathComponent(rel)
                 guard isRealDirectory(url) else { return nil }
                 return CleanItem(url: url, bytes: FileOps.directorySize(url).bytes, ticked: true)
             }
+            // Stale node_modules are listed apart and left unticked: the project may still need them.
+            let stale = found.nodeModules.filter { now.timeIntervalSince($0.modified) > 180 * day }.map {
+                CleanItem(url: $0.url, bytes: FileOps.directorySize($0.url, maxEntries: 50_000).bytes, ticked: false, note: staleNodeModulesNote)
+            }
+            return caches + stale
         case .duplicates:
-            let documents = home.appendingPathComponent("Documents").path + "/"
-            let candidates = files.filter { $0.size >= 1024 && (inDownloadsOrDesktop($0) || $0.url.path.hasPrefix(documents)) }
-            return duplicates(candidates, spareTicked: { f in inDownloadsOrDesktop(f) || Tidy.isLikelyCopyName(f.url.lastPathComponent) })
+            return []
         case .installers:
             return files.compactMap { f in
-                guard inDownloadsOrDesktop(f), FileKind.of(f.url.lastPathComponent) == .installers,
+                guard inDownloadsOrDesktop(f), FileKind.of(f.url.lastPathComponent) == .installers, wasDownloaded(f.url),
                       now.timeIntervalSince(f.modified) > 7 * day,
                       let app = Tidy.installerApp(f.url.lastPathComponent, Set(apps.keys)), let bundle = apps[app] else { return nil }
                 let appDate = (try? FileManager.default.attributesOfItem(atPath: bundle.path))?[.modificationDate] as? Date
@@ -167,39 +185,61 @@ public enum SmartClean {
         }
     }
 
-    /// Byte-identical files of the same size. Keeps the oldest of each set; a spare is ticked only when
-    /// `spareTicked` says so.
-    static func duplicates(_ files: [FileRecord], spareTicked: (FileRecord) -> Bool) -> [CleanItem] {
+    public static let staleNodeModulesNote = "Stale node_modules, untouched for 6 months"
+
+    /// Byte-identical files of the same size. Keeps the oldest of each set (on a tie, the one not named like a
+    /// copy, then the one outside Downloads/Desktop); a spare is ticked only when it is in Downloads/Desktop or
+    /// named like a copy. `kept` lists each set's kept file.
+    static func duplicates(_ files: [FileRecord], inDownloadsOrDesktop: (FileRecord) -> Bool) -> (items: [CleanItem], kept: [URL]) {
         var out: [CleanItem] = []
+        var kept: [URL] = []
+        func copyNamed(_ f: FileRecord) -> Bool { Tidy.isLikelyCopyName(f.url.lastPathComponent) }
         for (_, sameSize) in Dictionary(grouping: files, by: \.size) where sameSize.count > 1 {
             var sets: [[FileRecord]] = []
             for f in sameSize.sorted(by: { $0.url.path < $1.url.path }) {
-                if Task.isCancelled { return out }
+                if Task.isCancelled { return (out, kept) }
                 if let i = sets.firstIndex(where: { identical($0[0].url, f.url) }) { sets[i].append(f) } else { sets.append([f]) }
             }
             for set in sets where set.count > 1 {
-                // Oldest kept; on a tie keep the one that doesn't look like the copy.
                 let keep = set.min { a, b in
                     if a.oldest != b.oldest { return a.oldest < b.oldest }
-                    return spareTicked(a) == spareTicked(b) ? a.url.path < b.url.path : !spareTicked(a)
+                    if copyNamed(a) != copyNamed(b) { return !copyNamed(a) }
+                    if inDownloadsOrDesktop(a) != inDownloadsOrDesktop(b) { return !inDownloadsOrDesktop(a) }
+                    return a.url.path < b.url.path
                 }!
+                kept.append(keep.url)
                 for f in set where f.url != keep.url {
                     let note = "Same as “\(keep.url.lastPathComponent)” in \(keep.url.deletingLastPathComponent().lastPathComponent)"
-                    out.append(CleanItem(url: f.url, bytes: f.size, ticked: spareTicked(f), note: note))
+                    out.append(CleanItem(url: f.url, bytes: f.size, ticked: inDownloadsOrDesktop(f) || copyNamed(f), note: note))
                 }
             }
         }
-        return out.sorted { $0.bytes != $1.bytes ? $0.bytes > $1.bytes : $0.url.path < $1.url.path }
+        return (out.sorted { $0.bytes != $1.bytes ? $0.bytes > $1.bytes : $0.url.path < $1.url.path }, kept)
     }
 
-    static func identical(_ a: URL, _ b: URL) -> Bool {
+    /// Same bytes. Any open or read failure counts as different, so an unreadable file is never offered as a spare.
+    static func identical(_ a: URL, _ b: URL,
+                          read: (FileHandle) throws -> Data? = { try $0.read(upToCount: 65_536) }) -> Bool {
         guard let x = try? FileHandle(forReadingFrom: a), let y = try? FileHandle(forReadingFrom: b) else { return false }
         defer { try? x.close(); try? y.close() }
-        while true {
-            let p = (try? x.read(upToCount: 65_536)) ?? nil, q = (try? y.read(upToCount: 65_536)) ?? nil
-            if p != q { return false }
-            if p == nil || p!.isEmpty { return true }
+        do {
+            while true {
+                let p = try read(x) ?? Data(), q = try read(y) ?? Data()
+                if p != q { return false }
+                if p.isEmpty { return true }
+            }
+        } catch {
+            return false
         }
+    }
+
+    /// F10.3 "downloaded": macOS marks downloads with a quarantine attribute. Elsewhere every file counts.
+    static func wasDownloaded(_ url: URL) -> Bool {
+        #if os(macOS)
+        return getxattr(url.path, "com.apple.quarantine", nil, 0, 0, XATTR_NOFOLLOW) >= 0
+        #else
+        return true
+        #endif
     }
 
     public static func diskSummary(home: URL) -> (free: Int64, total: Int64, used: Int64, trash: Int64) {
@@ -208,6 +248,8 @@ public enum SmartClean {
         return (disk.free, disk.total, max(0, disk.total - disk.free), trash)
     }
 
+    // shortcut: F10.1's breakdown (Your files, Apps, macOS & system, Snapshots & system data) needs volume
+    // usage APIs outside Foundation; only free, total, used and the Trash are shown until the app adds them
     // MARK: Reading the disk
 
     struct FileRecord: Sendable {
@@ -224,10 +266,10 @@ public enum SmartClean {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType == .typeDirectory
     }
 
-    /// Regular, non-hidden files under `roots` to `maxDepth` levels, skipping links, hidden folders,
-    /// packages and node_modules; at most `maxEntries` names are looked at.
-    static func walk(_ roots: [URL], maxDepth: Int, maxEntries: Int = 100_000) -> [FileRecord] {
-        var out: [FileRecord] = []
+    /// Regular, non-hidden files under `roots` to `maxDepth` levels, plus the node_modules folders met (not
+    /// entered). Skips links, hidden folders and packages; at most `maxEntries` names are looked at.
+    static func walk(_ roots: [URL], maxDepth: Int, maxEntries: Int = 100_000) -> (files: [FileRecord], nodeModules: [FileRecord]) {
+        var files: [FileRecord] = [], nodeModules: [FileRecord] = []
         var looked = 0
         var stack: [(URL, Int)] = roots.reversed().map { ($0, 1) }
         while let (dir, depth) = stack.popLast(), looked < maxEntries, !Task.isCancelled {
@@ -237,22 +279,25 @@ public enum SmartClean {
                 if looked > maxEntries { break }
                 let url = dir.appendingPathComponent(name)
                 guard let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { continue }
+                let record = FileRecord(url: url, size: (a[.size] as? NSNumber)?.int64Value ?? 0,
+                                        created: a[.creationDate] as? Date ?? .distantFuture,
+                                        modified: a[.modificationDate] as? Date ?? .distantFuture)
                 switch a[.type] as? FileAttributeType {
                 case .typeDirectory:
-                    if depth < maxDepth, name != "node_modules", !isPackage(name) { stack.append((url, depth + 1)) }
-                case .typeRegular:
-                    out.append(FileRecord(url: url, size: (a[.size] as? NSNumber)?.int64Value ?? 0,
-                                          created: a[.creationDate] as? Date ?? .distantFuture,
-                                          modified: a[.modificationDate] as? Date ?? .distantFuture))
+                    if name == "node_modules" { nodeModules.append(record) }
+                    else if depth < maxDepth, !isPackage(url) { stack.append((url, depth + 1)) }
+                case .typeRegular: files.append(record)
                 default: break
                 }
             }
         }
-        return out
+        return (files, nodeModules)
     }
 
-    private static func isPackage(_ name: String) -> Bool {
-        let ext = (name as NSString).pathExtension.lowercased()
+    private static func isPackage(_ url: URL) -> Bool {
+        if (try? url.resourceValues(forKeys: [.isPackageKey]))?.isPackage == true { return true }
+        // Linux has no package registry; these are the bundles the scanned folders usually hold.
+        let ext = url.pathExtension.lowercased()
         return ["app", "bundle", "framework", "photoslibrary", "xcodeproj", "xcworkspace", "pages", "numbers", "key"].contains(ext)
     }
 

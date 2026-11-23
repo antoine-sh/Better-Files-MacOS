@@ -82,6 +82,10 @@ final class AppModel {
     var colorOverrides: [String: String]
     var autoSymbols: [String: String] = [:]
     var symbolTargets: [URL] = []
+    /// App names in the Applications folders, for the Insights suggestions; nil until first loaded.
+    var installedAppNames: Set<String>?
+    /// Where Free Up Space looks for apps; nil is the real Applications folders (the self-test narrows it).
+    var cleanApplications: [URL]?
     var showSymbolChooser = false
     /// The layout's panes (1–4, F8.3); menus and keys act on `pane`, the active one.
     var panes: [PaneModel]

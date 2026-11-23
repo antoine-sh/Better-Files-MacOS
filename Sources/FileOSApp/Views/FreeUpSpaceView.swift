@@ -7,6 +7,10 @@ import FileOSCore
 final class CleanModel {
     private(set) var cards: [CleanCard] = CleanModel.emptyCards
     private(set) var looking = false
+    /// True until a scan finishes, and again after one is cancelled, so the page looks again when it reappears.
+    private(set) var needsScan = true
+    /// Scans started, for the self-test.
+    private(set) var scansStarted = 0
     private(set) var summary: (free: Int64, total: Int64, used: Int64, trash: Int64)?
     var openCard: CardID?
     @ObservationIgnored private var scanTask: Task<(summary: (free: Int64, total: Int64, used: Int64, trash: Int64), cards: [CleanCard]), Never>?
@@ -16,6 +20,7 @@ final class CleanModel {
     /// "Look Again": the cards go grey with "Looking…" and fill when the scan ends; an older scan is cancelled.
     func scan(home: URL, applications: [URL]? = nil) async {
         scanTask?.cancel()
+        scansStarted += 1
         looking = true
         cards = Self.emptyCards
         let running: Set<String> = Set(NSWorkspace.shared.runningApplications.compactMap { (a: NSRunningApplication) -> String? in a.localizedName })
@@ -31,12 +36,23 @@ final class CleanModel {
         summary = result.summary
         cards = result.cards
         looking = false
+        needsScan = false
     }
 
     func cancel() {
-        scanTask?.cancel()
+        guard let task = scanTask else { return }
+        task.cancel()
         scanTask = nil
-        looking = false
+        if looking {
+            looking = false
+            needsScan = true
+        }
+    }
+
+    /// Duplicates' "Tick These Too".
+    func tickTheseToo() {
+        guard let c = cards.firstIndex(where: { (card: CleanCard) -> Bool in card.id == .duplicates }) else { return }
+        cards[c].tickTheseToo()
     }
 
     func card(_ id: CardID) -> CleanCard? { cards.first { (c: CleanCard) -> Bool in c.id == id } }
@@ -110,13 +126,14 @@ struct FreeUpSpaceView: View {
                 Button("Look Again", action: { lookAgain() }).disabled(clean.looking)
             }
         }
-        .onAppear { if clean.summary == nil && !clean.looking { lookAgain() } }
+        .onAppear { if clean.needsScan && !clean.looking { lookAgain() } }
         .onDisappear { clean.cancel() }
     }
 
     private func lookAgain() {
         let home: URL = model.home
-        Task { await clean.scan(home: home) }
+        let apps: [URL]? = model.cleanApplications
+        Task { await clean.scan(home: home, applications: apps) }
     }
 }
 
@@ -202,12 +219,26 @@ private struct CardDetail: View {
             HStack {
                 Button("Tick all", action: { clean.setTicked(card.id, item: nil, true) })
                 Button("Untick all", action: { clean.setTicked(card.id, item: nil, false) })
+                if card.id == .duplicates, card.items.contains(where: { (i: CleanItem) -> Bool in !i.ticked }) {
+                    Button("Tick These Too", action: { clean.tickTheseToo() })
+                        .help("Tick the spares left unticked; one copy of each is always kept")
+                }
             }
-            ForEach(card.items) { (item: CleanItem) in
+            ForEach(main) { (item: CleanItem) in
                 CleanItemRow(clean: clean, card: card.id, item: item)
+            }
+            if !apart.isEmpty {
+                Text("Stale node_modules").font(.headline).padding(.top, 6)
+                ForEach(apart) { (item: CleanItem) in
+                    CleanItemRow(clean: clean, card: card.id, item: item)
+                }
             }
         }
     }
+
+    /// Developer caches list stale node_modules apart (F10.3).
+    private var apart: [CleanItem] { card.items.filter { (i: CleanItem) -> Bool in i.note == SmartClean.staleNodeModulesNote } }
+    private var main: [CleanItem] { card.items.filter { (i: CleanItem) -> Bool in i.note != SmartClean.staleNodeModulesNote } }
 
     private func back() { clean.openCard = nil }
 }
