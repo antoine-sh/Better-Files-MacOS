@@ -63,8 +63,8 @@ final class AppModel {
     /// The layout's panes (1–4, F8.3); menus and keys act on `pane`, the active one.
     var panes: [PaneModel]
     var activePane = 0
-    private(set) var layout: PaneLayout = .one
-    private(set) var savedLayouts: [SavedLayout]
+    var layout: PaneLayout = .one // set through setLayout (PaneLayoutView.swift)
+    var savedLayouts: [SavedLayout] // set through setSavedLayouts, which persists it
     private(set) var showHidden: Bool
     var page: Page = .browser
     private(set) var toasts: [Toast] = []
