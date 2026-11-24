@@ -141,7 +141,10 @@ final class AppModel {
     var showQuickActions = false
     /// Set by the app (not the self-test): the panel, the global hotkey and opening a window when none is open.
     @ObservationIgnored var toggleShelf: (@MainActor () -> Void)?
-    @ObservationIgnored var dropShelfShortcutChanged: (@MainActor (KeyCombo) -> Void)?
+    /// Registers the global shortcut; false when the system refused it.
+    @ObservationIgnored var dropShelfShortcutChanged: (@MainActor (KeyCombo) -> Bool)?
+    /// "Pin a folder"'s open panel is up: the shelf must not hide under it.
+    @ObservationIgnored var shelfModalOpen = false
     @ObservationIgnored var openMainWindow: (@MainActor () -> Void)?
 
     // Sidebar

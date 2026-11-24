@@ -47,6 +47,8 @@ extension AppModel {
         let sources: [URL] = urls.filter { (u: URL) -> Bool in u.isFileURL }
         guard !sources.isEmpty else { return }
         let mode: TransferMode = copy ? .copy : .move
+        // Held files that move leave Holding (their paths are gone); undo puts them back in it.
+        let held: [URL] = sources.map { (u: URL) -> URL in Self.heldURL(u) }.filter { (u: URL) -> Bool in holding.contains(u) }
         guard let outcome = await transfers.run(sources, to: folder, mode: mode) else { return }
         reloadAll()
         pruneHolding() // held files that just moved are no longer where holding points
@@ -58,7 +60,12 @@ extension AppModel {
                 r.from.lastPathComponent
             }
             if !names.isEmpty {
-                undo.push(copy ? "Copy" : "Move", result.undo)
+                let restore: @Sendable () async -> RestoreResult = result.undo
+                undo.push(copy ? "Copy" : "Move") {
+                    let restored: RestoreResult = await restore()
+                    await self.addToHolding(held)
+                    return restored
+                }
                 shelfResult = Toast(text: DropShelfText.result(names: names, folder: folder.lastPathComponent, copied: copy),
                                     undoable: true)
             }
@@ -169,18 +176,21 @@ extension AppModel {
 
     var dropShelfShortcut: KeyCombo { shortcuts["dropShelf"] ?? KeyCombo(key: "space", option: true) }
 
-    /// nil when the new shortcut was taken; otherwise why it wasn't. The app re-registers the hotkey.
+    /// nil when the new shortcut was registered and saved; otherwise why not (the old one stays in use).
     @discardableResult
     func setDropShelfShortcut(_ combo: KeyCombo) -> String? {
         guard combo.canBeGlobal else { return "The Drop Shelf shortcut must include ⌘, ⌥ or ⌃" }
         if Shortcuts.conflict(in: shortcuts, action: "dropShelf", combo: combo) != nil {
             return "\(combo) is already used by another command"
         }
+        if let register = dropShelfShortcutChanged, !register(combo) {
+            _ = register(dropShelfShortcut) // keep the shortcut that worked
+            return "Couldn't use \(combo): another app may be using it"
+        }
         var user: [String: KeyCombo] = store.get("shortcuts", default: [String: KeyCombo]())
         user["dropShelf"] = combo
         store.set("shortcuts", user)
         shortcuts["dropShelf"] = combo
-        dropShelfShortcutChanged?(combo)
         return nil
     }
 }
@@ -231,6 +241,8 @@ struct DropShelfView: View {
     }
 
     private func pinAFolder() {
+        model.shelfModalOpen = true
+        defer { model.shelfModalOpen = false }
         NSApp.activate()
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -266,9 +278,20 @@ private struct ShelfTile: View {
     let number: Int?
     @Environment(AppModel.self) private var model
     @State private var targeted = false
+    /// Read off the main actor (a big or slow folder must not stall drag hovering); nil until read.
+    @State private var count: Int??
 
     private var countText: String {
-        AppModel.itemCount(url).map { (n: Int) -> String in AppModel.items(n) } ?? "Can't find it"
+        guard let count else { return "" }
+        return count.map { (n: Int) -> String in AppModel.items(n) } ?? "Can't find it"
+    }
+
+    /// Read again after each shelf drop.
+    private var countKey: String { "\(url.path)|\(model.shelfResult?.id.uuidString ?? "")" }
+
+    private func loadCount() async {
+        let folder: URL = url
+        count = .some(await Task.detached { () -> Int? in AppModel.itemCount(folder) }.value)
     }
 
     private var fill: Color { targeted ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.04) }
@@ -294,6 +317,7 @@ private struct ShelfTile: View {
 
     var body: some View {
         tile
+        .task(id: countKey) { await loadCount() }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.openInFileOS(url) }
         .dropDestination(for: URL.self, action: { (urls: [URL], _: CGPoint) -> Bool in
@@ -493,8 +517,7 @@ final class DropShelfController {
         defer { hiding = false }
         hideTask?.cancel()
         panel?.orderOut(nil)
-        shownByDrag = false
-        model.shelfResult = nil
+        shownByDrag = false // the result line stays: its Undo is still the latest shelf action
     }
 
     /// Quit: no more monitors, no panel.
@@ -522,7 +545,7 @@ final class DropShelfController {
         panel.onKey = { [weak self] (event: NSEvent) -> Bool in self?.handleKey(event) ?? false }
         panel.onResignKey = { [weak self] in
             // Opened with the shortcut: clicking another app puts it away, as Spotlight does.
-            if let self, !self.shownByDrag, self.isShown { self.hide() }
+            if let self, !self.shownByDrag, self.isShown, !self.modalUp { self.hide() }
         }
         self.panel = panel
         self.host = host
@@ -593,11 +616,13 @@ final class DropShelfController {
         hideTask = Task { [weak self] in
             repeat {
                 try? await Task.sleep(for: .seconds(3))
-            } while !Task.isCancelled && self?.pointerInside == true
+            } while !Task.isCancelled && (self?.pointerInside == true || self?.modalUp == true)
             guard !Task.isCancelled, let self, self.shownByDrag else { return }
             self.hide()
         }
     }
+
+    private var modalUp: Bool { model.shelfModalOpen || NSApp.modalWindow != nil }
 
     private var pointerInside: Bool { panel.map { (p: ShelfPanel) -> Bool in p.frame.contains(NSEvent.mouseLocation) } ?? false }
 }

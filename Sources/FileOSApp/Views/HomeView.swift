@@ -162,19 +162,31 @@ private struct TodayWidget: View {
     }
 }
 
+/// Read off the main actor: statfs on a slow or network volume must not stall rendering.
 private struct DiskSpaceWidget: View {
     @Environment(AppModel.self) private var model
+    @State private var disk: (total: Int64, free: Int64)?
 
     var body: some View {
-        let disk: (total: Int64, free: Int64) = FileOps.diskInfo(for: model.home)
-        let used: Double = DiskLine.usedFraction(total: disk.total, free: disk.free)
-        return Widget(title: "Disk Space", symbol: "internaldrive") {
-            Text("\(formatBytes(disk.free)) available").font(.title3.weight(.semibold))
-            ProgressView(value: used).tint(used >= 0.9 ? Color.orange : Color.accentColor)
-            Text("\(formatBytes(disk.total - disk.free)) used of \(formatBytes(disk.total))")
-                .font(.caption).foregroundStyle(.secondary)
+        Widget(title: "Disk Space", symbol: "internaldrive") {
+            if let disk {
+                let used: Double = DiskLine.usedFraction(total: disk.total, free: disk.free)
+                Text("\(formatBytes(disk.free)) available").font(.title3.weight(.semibold))
+                ProgressView(value: used).tint(used >= 0.9 ? Color.orange : Color.accentColor)
+                Text("\(formatBytes(disk.total - disk.free)) used of \(formatBytes(disk.total))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Button("Free Up Space…", action: { model.page = .freeUpSpace })
         }
+        .task { await load() }
+    }
+
+    private func load() async {
+        let home: URL = model.home
+        let info: (total: Int64, free: Int64) = await Task.detached { () -> (total: Int64, free: Int64) in
+            FileOps.diskInfo(for: home)
+        }.value
+        disk = info
     }
 }
 
@@ -233,6 +245,7 @@ private struct PhotoFrameWidget: View {
 /// The first Drop Shelf pin, else the first Quick Access folder, else Documents.
 private struct PinnedFolderWidget: View {
     @Environment(AppModel.self) private var model
+    @State private var count: Int??
 
     private var folder: URL {
         model.shelfPinned.first ?? model.quickAccess.first ?? model.home.appendingPathComponent("Documents")
@@ -245,12 +258,22 @@ private struct PinnedFolderWidget: View {
                 Image(nsImage: Thumbnails.icon(folder)).resizable().frame(width: 40, height: 40).accessibilityHidden(true)
                 VStack(alignment: .leading) {
                     Text(folder.lastPathComponent).font(.title3.weight(.semibold))
-                    Text(AppModel.itemCount(folder).map { (n: Int) -> String in AppModel.items(n) } ?? "Can't find it")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text(countText).font(.caption).foregroundStyle(.secondary)
                 }
             }
             Button("Open", action: { model.open(folder) })
         }
+        .task(id: folder) { await loadCount(folder) }
+    }
+
+    private var countText: String {
+        guard let count else { return "" }
+        return count.map { (n: Int) -> String in AppModel.items(n) } ?? "Can't find it"
+    }
+
+    /// Off the main actor, like the shelf's counts.
+    private func loadCount(_ folder: URL) async {
+        count = .some(await Task.detached { () -> Int? in AppModel.itemCount(folder) }.value)
     }
 }
 

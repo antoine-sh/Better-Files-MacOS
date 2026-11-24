@@ -1021,8 +1021,28 @@ enum SelfTest {
         await model.dropShelfMove(model.holding, to: inbox, copy: false)
         check("held files dropped on a pin move and leave holding", exists(landed) && model.holding.isEmpty)
         await model.undoLast()
+        check("undoing it puts the files back in Holding", exists(drop) && !exists(landed)
+                && model.holding.map { (u: URL) -> String in u.path } == [drop.path])
         model.addToHolding([drop])
         model.clearHolding()
+
+        // A clash on a shelf drop asks the shared question; Keep Both, then undo, leaves the other file alone.
+        write(landed)
+        let clashing = Task { await model.dropShelfMove([drop], to: inbox, copy: false) }
+        var asked = false
+        for _ in 0..<150 where !asked {
+            try? await Task.sleep(for: .milliseconds(20))
+            asked = model.clashPrompt != nil
+        }
+        check("a shelf drop asks about a clash", asked)
+        model.answerClash(.keepBoth, all: false)
+        await clashing.value
+        let both: URL = inbox.appendingPathComponent("drop 2.txt")
+        check("Keep Both on a shelf drop keeps both", exists(both) && exists(landed) && !exists(drop)
+                && model.shelfResult?.text == "Just now: Moved “drop.txt” to Inbox")
+        await model.undoLast()
+        check("undoing it moves only the dropped file back", exists(drop) && !exists(both) && exists(landed))
+        try? fm.removeItem(at: landed)
         check("Clear empties holding for good", model.holding.isEmpty && reopened().holding.isEmpty && exists(drop))
 
         model.addToQuickAccess([inbox])
@@ -1054,7 +1074,10 @@ enum SelfTest {
         model.setQuickActions(QuickAction.defaults)
 
         let seen = SeenCombo()
-        model.dropShelfShortcutChanged = { (combo: KeyCombo) in seen.combo = combo }
+        model.dropShelfShortcutChanged = { (combo: KeyCombo) -> Bool in
+            seen.combo = combo
+            return seen.accepts
+        }
         let bare: String? = model.setDropShelfShortcut(KeyCombo(key: "space", shift: true))
         check("a shelf shortcut needs ⌘, ⌥ or ⌃", bare != nil && seen.combo == nil)
         let taken: String? = model.setDropShelfShortcut(KeyCombo(key: "k", command: true))
@@ -1063,6 +1086,11 @@ enum SelfTest {
         let fine: String? = model.setDropShelfShortcut(wanted)
         check("a new shelf shortcut is saved and re-registered", fine == nil && seen.combo == wanted
                 && reopened().dropShelfShortcut == wanted)
+        seen.accepts = false
+        let refused: String? = model.setDropShelfShortcut(KeyCombo(key: "d", command: true, option: true, control: true))
+        check("a refused shelf shortcut keeps the old one", refused != nil && seen.combo == wanted
+                && model.dropShelfShortcut == wanted && reopened().dropShelfShortcut == wanted)
+        seen.accepts = true
         check("hotkey key codes", HotKey.keyCode("space") == 49 && HotKey.keyCode("k") == 40 && HotKey.keyCode("f5") == 96
                 && HotKey.modifiers(KeyCombo(key: "space", option: true)) == 0x0800)
         model.setDropShelfShortcut(KeyCombo(key: "space", option: true))
@@ -1110,6 +1138,8 @@ enum SelfTest {
 @MainActor
 private final class SeenCombo {
     var combo: KeyCombo?
+    /// What the system answers when asked to register.
+    var accepts = true
 }
 
 /// Canned answers for the self-test, so it runs no real git, brew, lsof or system tools.

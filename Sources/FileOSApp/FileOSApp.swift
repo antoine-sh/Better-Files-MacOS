@@ -16,14 +16,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.shelf = shelf
         model.toggleShelf = { [weak shelf] in shelf?.toggle() }
         hotKey = HotKey(action: { [weak shelf] in shelf?.toggle() })
-        registerHotKey(model.dropShelfShortcut)
-        model.dropShelfShortcutChanged = { [weak self] (combo: KeyCombo) in self?.registerHotKey(combo) }
-    }
-
-    private func registerHotKey(_ combo: KeyCombo) {
-        guard let hotKey, !hotKey.register(combo) else { return }
-        model.toast("Couldn't use \(combo) for the Drop Shelf: another app may be using it. Choose another shortcut in Settings.",
-                    undoable: false)
+        if hotKey?.register(model.dropShelfShortcut) == false {
+            model.toast("Couldn't use \(model.dropShelfShortcut) for the Drop Shelf: another app may be using it. Choose another shortcut in Settings.",
+                        undoable: false)
+        }
+        // Settings reports a refused new shortcut itself, and the model re-registers the old one.
+        model.dropShelfShortcutChanged = { [weak self] (combo: KeyCombo) -> Bool in self?.hotKey?.register(combo) ?? false }
     }
 
     /// F1.6: closing the last window keeps FileOS running, so the Drop Shelf shortcut keeps working.
