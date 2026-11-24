@@ -52,7 +52,7 @@ and privacy (TCC) prompts.
 | Section | Status | Notes |
 |---|---|---|
 | F1 App shell & onboarding | Partial | Window, toolbar, status bar, menus, welcome, keeps running, restore state and What's New are built. F1.8, F1.9 and F1.11 are skipped (see below). |
-| F2 Sidebar | Partial | Sections, add/remove favourites, drops, disk line and eject are built. Missing: tags, cloud drives, hiding drives, the "?" for a moved favourite, sidebar sizes and search, and dragging a folder in. F2.7 is skipped. |
+| F2 Sidebar | Partial | Sections (with iCloud Drive, cloud drives and Finder tags via Spotlight), add/remove favourites, drops, disk line, eject, sidebar sizes, sidebar search and ⌃⌘S are built. Missing: hiding drives, the "?" for a moved favourite, and dragging a folder in. F2.7 is skipped. |
 | F3 Browsing | Done | List, icon and column views, sizes, cards, grouping and sorting, filter, live updates, preview pane, Insights and the locked-folder screen. |
 | F4 Path bar | Done | Crumbs, typed paths, near-miss errors, command words, git chip and Copy Path. |
 | F5 File operations | Partial | Built except: no "Move with Finder" fallback when trashing fails, and archives cover .zip only (no .7z, .rar or .tar.gz). |
@@ -66,7 +66,7 @@ and privacy (TCC) prompts.
 | F13 Folder symbols & colours | Done | |
 | F14 Developer tools | Done | |
 | F15 Drop Shelf & menu bar | Partial | Notch hover is not verified. F15.4 is skipped. |
-| F16 Home | Partial | Stickers are missing. |
+| F16 Home | Done | Stickers come from a fixed emoji set. |
 | F17 Settings | Done | Open at login needs the bundled `.app`. |
 | F18 Keyboard map | Done | All shortcuts can be rebound in Settings > Shortcuts. |
 | F19 Requirements | Done | macOS 15+, SwiftUI. Folder listings run off the main actor. |

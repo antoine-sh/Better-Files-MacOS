@@ -246,6 +246,11 @@ private struct ViewMenuCommands: Commands {
             PaneCommands(model: model)
             Divider()
         }
+        // Replaces the system's sidebar item so ⌃⌘S has one owner (F2.5).
+        CommandGroup(replacing: .sidebar) {
+            MenuItem(title: model.showSidebar ? "Hide Sidebar" : "Show Sidebar", id: "toggleSidebar", model: model,
+                     action: { model.showSidebar.toggle() })
+        }
     }
 
     @ViewBuilder private var modeCommands: some View {

@@ -4,13 +4,16 @@ import FileOSCore
 /// F1.1: sidebar | toolbar, path bar, file area, status bar. Tool pages replace the browser.
 struct MainWindow: View {
     @Environment(AppModel.self) private var model
+    @State private var columns: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
             detail
         }
+        .onChange(of: model.showSidebar) { columns = model.showSidebar ? .all : .detailOnly }
+        .onChange(of: columns) { model.showSidebar = columns != .detailOnly }
         .overlay(alignment: .bottom) { ToastsView() }
         .overlay(alignment: .bottomTrailing) { TransferQueueView(queue: model.transfers) }
         .overlay { SearchOverlay() }
@@ -49,6 +52,8 @@ struct MainWindow: View {
             HomeView()
         } else if model.page == .aboutMac {
             AboutMacView(hideNames: model.hideNames)
+        } else if case .tag = model.page {
+            TagPage(title: model.page.title)
         } else if case .workspace(let id) = model.page {
             WorkspacePage(id: id).id(id) // fresh tab, view and search per workspace
         } else {

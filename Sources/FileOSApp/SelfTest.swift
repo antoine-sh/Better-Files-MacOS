@@ -161,6 +161,7 @@ enum SelfTest {
         await libraryChecks(model, check)
         await devChecks(model, check)
         await homeChecks(model, check)
+        await sidebarChecks(model, check)
         await settingsChecks(model, check)
 
         try? fm.removeItem(at: home)
@@ -1189,6 +1190,56 @@ enum SelfTest {
         model.clearHolding()
     }
 
+    /// F2.1 cloud drives and tags, F2.5 sidebar search and ⌃⌘S, F16.1 stickers.
+    static func sidebarChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        func reopened() -> AppModel { AppModel(home: home, trashDir: model.trashDir) }
+        try? fm.createDirectory(at: home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs"), withIntermediateDirectories: true)
+        try? fm.createDirectory(at: home.appendingPathComponent("Library/CloudStorage/Dropbox"), withIntermediateDirectories: true)
+        model.refreshVolumes()
+        let clouds: [String] = model.cloudDrives.map { (u: URL) -> String in SidebarView.cloudTitle(u) }
+        check("Locations lists iCloud Drive, then cloud drives", clouds == ["iCloud Drive", "Dropbox"])
+
+        model.openTag("Red")
+        await model.tagSearch?.value
+        check("a tag shows its files from Spotlight", model.page == .tag("Red") && !model.loadingTag
+                && model.tagged.map { (u: URL) -> String in u.path } == ["/Users/Shared/red.txt"])
+        check("the tag page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        model.openTag(nil)
+        await model.tagSearch?.value
+        check("All Tags… asks for every tag", model.page.title == "All Tags" && model.tagged.isEmpty)
+        model.page = .browser
+
+        let found: [String] = SidebarView.matches(model, "down").map { (e: SidebarEntry) -> String in e.title }
+        check("sidebar search filters rows by name", found == ["Downloads"])
+        check("sidebar search finds folded sections", SidebarView.matches(model, "trash").map { (e: SidebarEntry) -> String in e.title } == ["Trash"])
+        check("⌃⌘S toggles the sidebar by default", Shortcuts.defaults["toggleSidebar"] == KeyCombo("Ctrl+Cmd+S")
+                && Shortcuts.conflict(in: Shortcuts.defaults, action: "toggleSidebar", combo: KeyCombo("Ctrl+Cmd+S")!) == nil)
+        model.showSidebar.toggle()
+        check("hiding the sidebar still builds the window", !model.showSidebar && !hostedViews(model).isEmpty)
+        model.showSidebar = true
+
+        model.addSticker("⭐️")
+        check("Add Sticker places one and says so", model.stickers.map { (s: Sticker) -> String in s.emoji } == ["⭐️"]
+                && hasToast(model, "Added a sticker"))
+        if let id = model.stickers.first?.id { model.moveSticker(id, x: 300, y: 120) }
+        check("a dragged sticker stays put", reopened().stickers.first.map { (s: Sticker) -> Bool in s.x == 300 && s.y == 120 } == true)
+        await model.undoLast()
+        check("undoing Add Sticker takes it off", model.stickers.isEmpty && reopened().stickers.isEmpty)
+        model.addSticker("🚀")
+        if let id = model.stickers.first?.id { model.removeSticker(id) }
+        check("Remove Sticker says so", model.stickers.isEmpty && hasToast(model, "Removed a sticker"))
+        await model.undoLast()
+        check("undoing Remove Sticker puts it back", model.stickers.map { (s: Sticker) -> String in s.emoji } == ["🚀"])
+        model.page = .home
+        check("Home builds with stickers", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        model.setHomePart(.stickers, shown: false)
+        check("Customize hides stickers", !HomePart.stickers.isShown(in: reopened().homeParts))
+        model.setHomePart(.stickers, shown: true)
+        model.page = .browser
+    }
+
     /// F17, F1.5, F1.7, F1.10 at model level, plus the Settings and welcome views building offscreen.
     static func settingsChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
         let fm = FileManager.default
@@ -1354,6 +1405,7 @@ struct SelfTestRunner: CommandRunner {
         case "fdesetup": return (0, "FileVault is On.\n")
         case "csrutil": return (0, "System Integrity Protection status: enabled.\n")
         case "spctl": return (0, "assessments enabled\n")
+        case "mdfind": return (0, args == ["kMDItemUserTags == 'Red'"] ? "/Users/Shared/red.txt\n" : "")
         default: throw CommandError.notFound(exe)
         }
     }

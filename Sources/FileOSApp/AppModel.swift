@@ -8,6 +8,8 @@ enum Page: Hashable, Sendable {
     case browser, home, bookmarks, freeUpSpace, installed, agents, workspace(UUID), aboutMac
     /// The Markdown page for `AppModel.markdown` (F6.3).
     case markdown
+    /// F2.1: files with a Finder tag; nil is "All Tags…".
+    case tag(String?)
 
     var title: String {
         switch self {
@@ -20,6 +22,7 @@ enum Page: Hashable, Sendable {
         case .workspace: return "Workspace"
         case .aboutMac: return "About This Mac"
         case .markdown: return "Markdown"
+        case .tag(let name): return name ?? "All Tags"
         }
     }
 }
@@ -165,6 +168,16 @@ final class AppModel {
     // Sidebar
     private(set) var favorites: [URL]
     private(set) var volumes: [URL] = []
+    /// F2.1: iCloud Drive and cloud drives, above home in Locations.
+    private(set) var cloudDrives: [URL] = []
+    /// F2.5 ⌃⌘S.
+    var showSidebar = true
+    /// F2.1: the open tag page's files.
+    private(set) var tagged: [URL] = []
+    private(set) var loadingTag = false
+    @ObservationIgnored private(set) var tagSearch: Task<Void, Never>?
+    /// F16.1 Home stickers, kept element by element.
+    private(set) var stickers: [Sticker]
     @ObservationIgnored private var mountObservers: [NSObjectProtocol] = []
     private(set) var collapsedSections: Set<String>
     /// The Mac's sharing name, read from the local configuration store (no network lookup, unlike Host).
@@ -204,6 +217,7 @@ final class AppModel {
         holding = kept
         if kept.count != held.count { store.set("holding", kept.map { (u: URL) -> String in u.path }) }
         quickAccess = urls("quickAccess")
+        stickers = store.getArray("home.stickers", of: Sticker.self) ?? []
         homeParts = store.get("home.widgets", default: [String: Bool]())
         quickActions = QuickAction.ordered(store.getArray("quickActions", of: String.self))
         let saved: AppSettings = store.get("settings", default: AppSettings())
@@ -348,6 +362,22 @@ final class AppModel {
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey],
                                                          options: [.skipHiddenVolumes]) ?? []
         volumes = urls.filter { $0.path != "/" }.map(FileOps.canonical)
+        cloudDrives = CloudLocations.list(home: home)
+    }
+
+    /// Spotlight finds the files off the main actor; a newer tag page wins over an older search.
+    func openTag(_ tag: String?) {
+        page = .tag(tag)
+        tagged = []
+        loadingTag = true
+        tagSearch?.cancel()
+        let runner: any CommandRunner = runner
+        tagSearch = Task {
+            let found: [URL] = await FinderTags.files(tagged: tag, runner: runner)
+            guard !Task.isCancelled else { return }
+            tagged = found
+            loadingTag = false
+        }
     }
 
     /// A drive came or went (Finder, another app, or our Eject): panes showing a gone drive go home.

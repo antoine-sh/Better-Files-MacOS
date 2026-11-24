@@ -5,6 +5,12 @@ enum SidebarItem: Hashable, Sendable {
     case folder(URL), page(Page), bookmarks(BookmarkPlace)
 }
 
+struct SidebarEntry: Hashable {
+    let title: String
+    let symbol: String
+    let item: SidebarItem
+}
+
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
     // Plain @State instead of Binding(get:set:): Swift 6.1's IRGen crashed on the
@@ -15,17 +21,27 @@ struct SidebarView: View {
     @State private var favoritesOpen = true
     @State private var toolsOpen = true
     @State private var locationsOpen = false // F2.1: Locations always starts folded
+    @State private var tagsOpen = true
+    @State private var filter = ""
 
     var body: some View {
         List(selection: $selection) {
-            SidebarRow(title: "Home", symbol: "house.fill", item: .page(.home)) // F16.1
-            WorkspacesSection(open: $workspacesOpen)
-            BookmarksSection(open: $bookmarksOpen)
-            favorites
-            tools
-            locations
+            if filter.isEmpty {
+                SidebarRow(title: "Home", symbol: "house.fill", item: .page(.home)) // F16.1
+                WorkspacesSection(open: $workspacesOpen)
+                BookmarksSection(open: $bookmarksOpen)
+                favorites
+                tools
+                locations
+                tags
+            } else {
+                ForEach(Self.matches(model, filter), id: \.item) { (e: SidebarEntry) in
+                    SidebarRow(title: e.title, symbol: e.symbol, item: e.item)
+                }
+            }
         }
         .listStyle(.sidebar)
+        .searchable(text: $filter, placement: .sidebar, prompt: "Search") // F2.5
         .safeAreaInset(edge: .bottom) { DiskLine() }
         .onAppear { loadState() }
         .onChange(of: selection) { applySelection() }
@@ -36,6 +52,56 @@ struct SidebarView: View {
         .onChange(of: bookmarksOpen) { model.setExpanded("Bookmarks", bookmarksOpen) }
         .onChange(of: favoritesOpen) { model.setExpanded("Favorites", favoritesOpen) }
         .onChange(of: toolsOpen) { model.setExpanded("Tools", toolsOpen) }
+        .onChange(of: tagsOpen) { model.setExpanded("Tags", tagsOpen) }
+    }
+
+    /// F2.1 Tags: the Finder colours, then every tagged file.
+    private var tags: some View {
+        Section("Tags", isExpanded: $tagsOpen) {
+            ForEach(FinderTags.colors, id: \.self) { (name: String) in
+                Label {
+                    Text(name)
+                } icon: {
+                    Image(systemName: "circle.fill").foregroundStyle(Self.tagColor(name))
+                }
+                .tag(SidebarItem.page(.tag(name)))
+            }
+            SidebarRow(title: "All Tags…", symbol: "tag", item: .page(.tag(nil)))
+        }
+    }
+
+    static func tagColor(_ name: String) -> Color {
+        let colors: [String: Color] = ["Red": .red, "Orange": .orange, "Yellow": .yellow, "Green": .green,
+                                       "Blue": .blue, "Purple": .purple]
+        return colors[name] ?? .gray
+    }
+
+    static func cloudTitle(_ url: URL) -> String {
+        url.lastPathComponent == "com~apple~CloudDocs" ? "iCloud Drive" : url.lastPathComponent
+    }
+
+    /// F2.5: every row by name, for the sidebar search (folded sections included).
+    static func matches(_ model: AppModel, _ text: String) -> [SidebarEntry] {
+        var all: [SidebarEntry] = [SidebarEntry(title: "Home", symbol: "house.fill", item: .page(.home))]
+        for w in model.workspaces { all.append(SidebarEntry(title: w.name, symbol: "circle.fill", item: .page(.workspace(w.id)))) }
+        all += [SidebarEntry(title: "All Bookmarks", symbol: "bookmark", item: .bookmarks(.all)),
+                SidebarEntry(title: "Favourites", symbol: "star", item: .bookmarks(.favourites)),
+                SidebarEntry(title: "Unsorted", symbol: "tray", item: .bookmarks(.unsorted))]
+        for c in model.bookmarkState.collections { all.append(SidebarEntry(title: c.name, symbol: c.icon, item: .bookmarks(.collection(c.id)))) }
+        for url in model.standardFavorites + model.favorites {
+            all.append(SidebarEntry(title: url.lastPathComponent, symbol: symbol(for: url.lastPathComponent), item: .folder(url)))
+        }
+        all += [SidebarEntry(title: "Free Up Space", symbol: "sparkles", item: .page(.freeUpSpace)),
+                SidebarEntry(title: "Installed", symbol: "shippingbox", item: .page(.installed)),
+                SidebarEntry(title: "AI Agents", symbol: "cpu", item: .page(.agents))]
+        for url in model.cloudDrives { all.append(SidebarEntry(title: cloudTitle(url), symbol: "icloud", item: .folder(url))) }
+        all.append(SidebarEntry(title: model.home.lastPathComponent, symbol: "house", item: .folder(model.home)))
+        all.append(SidebarEntry(title: model.displayName(root), symbol: "internaldrive", item: .folder(root)))
+        for url in model.volumes { all.append(SidebarEntry(title: model.displayName(url), symbol: "externaldrive", item: .folder(url))) }
+        all.append(SidebarEntry(title: "Trash", symbol: "trash", item: .folder(model.trashURL)))
+        for name in FinderTags.colors { all.append(SidebarEntry(title: name, symbol: "tag", item: .page(.tag(name)))) }
+        all.append(SidebarEntry(title: "All Tags…", symbol: "tag", item: .page(.tag(nil))))
+        return all.filter { (e: SidebarEntry) -> Bool in e.title.localizedCaseInsensitiveContains(text) }
     }
 
     private var favorites: some View {
@@ -60,6 +126,9 @@ struct SidebarView: View {
 
     private var locations: some View {
         Section("Locations", isExpanded: $locationsOpen) {
+            ForEach(model.cloudDrives, id: \.self) { (url: URL) in
+                FolderRow(title: Self.cloudTitle(url), symbol: url.lastPathComponent == "com~apple~CloudDocs" ? "icloud" : "cloud", url: url)
+            }
             FolderRow(title: model.home.lastPathComponent, symbol: "house", url: model.home)
             FolderRow(title: model.displayName(Self.root), symbol: "internaldrive", url: Self.root)
             ForEach(model.volumes, id: \.self) { (url: URL) in VolumeRow(url: url) }
@@ -80,6 +149,7 @@ struct SidebarView: View {
         bookmarksOpen = model.isExpanded("Bookmarks")
         favoritesOpen = model.isExpanded("Favorites")
         toolsOpen = model.isExpanded("Tools")
+        tagsOpen = model.isExpanded("Tags")
         syncSelection()
     }
 
@@ -92,6 +162,7 @@ struct SidebarView: View {
         guard let item = selection, item != currentItem() else { return }
         switch item {
         case .folder(let url): model.open(url)
+        case .page(.tag(let name)): model.openTag(name)
         case .page(let page): model.page = page
         case .bookmarks(let place):
             model.bookmarkPlace = place

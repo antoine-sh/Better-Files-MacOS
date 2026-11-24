@@ -31,9 +31,13 @@ struct HomeView: View {
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topLeading) { if shown(.stickers) { StickerLayer() } }
         }
         .navigationTitle("Home")
-        .toolbar { customizeButton }
+        .toolbar {
+            stickerMenu
+            customizeButton
+        }
         .task { await load() }
     }
 
@@ -41,6 +45,17 @@ struct HomeView: View {
         ToolbarItem(placement: .primaryAction) {
             Button("Customize", action: { customizing = true })
                 .popover(isPresented: $customizing) { CustomizeHome().environment(model) }
+        }
+    }
+
+    private var stickerMenu: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Menu("Add Sticker") {
+                ForEach(Sticker.choices, id: \.self) { (emoji: String) in
+                    Button(emoji, action: { model.addSticker(emoji) })
+                }
+            }
+            .disabled(!shown(.stickers))
         }
     }
 
@@ -103,6 +118,44 @@ private struct PartToggle: View {
             .onAppear { on = part.isShown(in: model.homeParts) }
             .onChange(of: on) { model.setHomePart(part, shown: on) }
     }
+}
+
+/// F16.1: stickers float over Home; drag to place, right-click to remove.
+private struct StickerLayer: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(model.stickers) { (sticker: Sticker) in StickerView(sticker: sticker) }
+        }
+    }
+}
+
+private struct StickerView: View {
+    let sticker: Sticker
+    @Environment(AppModel.self) private var model
+    @State private var drag: CGSize = .zero
+
+    var body: some View {
+        Text(sticker.emoji)
+            .font(.system(size: 44))
+            .gesture(dragging)
+            .contextMenu { Button("Remove Sticker", action: { remove() }) }
+            .accessibilityLabel("Sticker \(sticker.emoji)")
+            .accessibilityAction(named: "Remove Sticker") { remove() }
+            .position(x: sticker.x + drag.width, y: sticker.y + drag.height)
+    }
+
+    private var dragging: some Gesture {
+        DragGesture()
+            .onChanged { (value: DragGesture.Value) in drag = value.translation }
+            .onEnded { (value: DragGesture.Value) in
+                model.moveSticker(sticker.id, x: sticker.x + value.translation.width, y: sticker.y + value.translation.height)
+                drag = .zero
+            }
+    }
+
+    private func remove() { model.removeSticker(sticker.id) }
 }
 
 private struct Widget<Content: View>: View {

@@ -166,6 +166,47 @@ extension AppModel {
         store.set("home.widgets", homeParts)
     }
 
+    /// F16.1: a new sticker lands in a free-ish spot under the greeting; Undo takes it off.
+    func addSticker(_ emoji: String) {
+        let sticker = Sticker(emoji: emoji, x: Double(420 + 50 * (stickers.count % 8)), y: 40)
+        stickers.append(sticker)
+        store.setArray("home.stickers", stickers)
+        undo.push("Add Sticker") {
+            await self.takeOffSticker(sticker.id)
+            return RestoreResult()
+        }
+        toast("Added a sticker", undoable: true)
+    }
+
+    func removeSticker(_ id: UUID) {
+        guard let index = stickers.firstIndex(where: { (s: Sticker) -> Bool in s.id == id }) else { return }
+        let sticker: Sticker = stickers[index]
+        takeOffSticker(id)
+        undo.push("Remove Sticker") {
+            await self.putBackSticker(sticker, at: index)
+            return RestoreResult()
+        }
+        toast("Removed a sticker", undoable: true)
+    }
+
+    func moveSticker(_ id: UUID, x: Double, y: Double) {
+        guard let index = stickers.firstIndex(where: { (s: Sticker) -> Bool in s.id == id }) else { return }
+        stickers[index].x = max(0, x)
+        stickers[index].y = max(0, y)
+        store.setArray("home.stickers", stickers)
+    }
+
+    private func takeOffSticker(_ id: UUID) {
+        stickers.removeAll { (s: Sticker) -> Bool in s.id == id }
+        store.setArray("home.stickers", stickers)
+    }
+
+    private func putBackSticker(_ sticker: Sticker, at index: Int) {
+        guard !stickers.contains(where: { (s: Sticker) -> Bool in s.id == sticker.id }) else { return }
+        stickers.insert(sticker, at: min(index, stickers.count))
+        store.setArray("home.stickers", stickers)
+    }
+
     /// Settings > Quick Actions: the chosen order; only the first six show.
     func setQuickActions(_ list: [QuickAction]) {
         store.set("quickActions", list.map { (a: QuickAction) -> String in a.rawValue })

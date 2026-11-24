@@ -272,7 +272,7 @@ private struct SearchResults: View {
     }
 }
 
-private struct PaletteRowView: View {
+struct PaletteRowView: View {
     let row: PaletteRow
 
     var body: some View {
