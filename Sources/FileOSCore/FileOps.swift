@@ -52,6 +52,23 @@ public struct RestoreResult: Sendable {
 // Outside FileOps so the C rename(2) isn't shadowed by FileOps.rename.
 private func posixRename(_ from: String, _ to: String) -> Int32 { rename(from, to) }
 
+/// rename(2) that fails with EEXIST instead of replacing `to`; callers have already checked `to` is free.
+private func posixRenameNoReplace(_ from: String, _ to: String) -> Int32 {
+    #if os(macOS)
+    if renamex_np(from, to, UInt32(RENAME_EXCL)) == 0 { return 0 }
+    guard errno == ENOTSUP || errno == EINVAL else { return -1 }
+    #endif
+    // shortcut: on Linux and on volumes without RENAME_EXCL, a target created after the caller's check is replaced; use renameat2 if Linux ships
+    return rename(from, to)
+}
+
+/// The copy or create failed because something is already at the destination (so it isn't ours to remove).
+func isFileExists(_ error: Error) -> Bool {
+    let ns = error as NSError
+    if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteFileExistsError { return true }
+    if ns.domain == NSPOSIXErrorDomain && ns.code == Int(EEXIST) { return true }
+    return (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map(isFileExists) ?? false
+}
 
 func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
 
@@ -145,17 +162,21 @@ public enum FileOps {
     }
 
     public static func rename(_ url: URL, to newName: String) throws -> URL {
-        if newName.isEmpty || newName == "." || newName == ".." || newName.contains("/") || newName.contains("\\") {
+        if newName.isEmpty || newName == "." || newName == ".." || newName.contains("/") {
             throw FileOSError.invalidName(newName)
         }
         let to = url.deletingLastPathComponent().appendingPathComponent(newName)
-        if to.path != url.path, exists(to) {
+        if to.path == url.path { return url }
+        var caseOnly = false
+        if exists(to) {
             // An existing target is only OK for a case-only rename of the same file (case-insensitive APFS).
-            let caseOnly = url.lastPathComponent.caseInsensitiveCompare(newName) == .orderedSame
-            if !(caseOnly && sameInode(url, to)) { throw FileOSError.alreadyExists(newName) }
+            caseOnly = url.lastPathComponent.caseInsensitiveCompare(newName) == .orderedSame && sameInode(url, to)
+            if !caseOnly { throw FileOSError.alreadyExists(newName) }
         }
-        if posixRename(url.path, to.path) != 0 {
-            throw mapped(NSError(domain: NSPOSIXErrorDomain, code: Int(errno)), url)
+        if (caseOnly ? posixRename(url.path, to.path) : posixRenameNoReplace(url.path, to.path)) != 0 {
+            let code = errno
+            if code == EEXIST { throw FileOSError.alreadyExists(newName) }
+            throw mapped(NSError(domain: NSPOSIXErrorDomain, code: Int(code)), url)
         }
         return to
     }
@@ -209,17 +230,20 @@ public enum FileOps {
     /// Never overwrites; falls back to copy + remove across volumes.
     public static func move(_ from: URL, to: URL) throws {
         if exists(to) { throw FileOSError.alreadyExists(to.lastPathComponent) }
-        if posixRename(from.path, to.path) == 0 { return }
+        if posixRenameNoReplace(from.path, to.path) == 0 { return }
         let code = errno
+        if code == EEXIST { throw FileOSError.alreadyExists(to.lastPathComponent) }
         guard code == EXDEV else { throw mapped(NSError(domain: NSPOSIXErrorDomain, code: Int(code)), from) }
         try copyThenRemove(from, to: to)
     }
 
-    /// The cross-volume move. `to` is known not to exist, so whatever is there after a failed copy is ours to remove.
+    /// The cross-volume move. Whatever a failed copy left at `to` is ours to remove, unless the copy
+    /// failed because something else got there first.
     // shortcut: if removing the source fails midway, both the full copy and what's left of the source stay
     static func copyThenRemove(_ from: URL, to: URL,
                                copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
         do { try copy(from, to) } catch {
+            if isFileExists(error) { throw FileOSError.alreadyExists(to.lastPathComponent) }
             try? FileManager.default.removeItem(at: to)
             throw mapped(error, from)
         }

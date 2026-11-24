@@ -118,7 +118,10 @@ public func transfer(
             if mode == .move { try FileOps.move(from, to: to) }
             else {
                 do { try FileManager.default.copyItem(at: from, to: to) }
-                catch { try? FileManager.default.removeItem(at: to); throw error } // don't leave a half-written copy
+                catch { // don't leave a half-written copy, but never remove what someone else put there
+                    if !isFileExists(error) { try? FileManager.default.removeItem(at: to) }
+                    throw error
+                }
             }
         } catch {
             // The operation failed after the old item was trashed: put it back so nothing is lost.
