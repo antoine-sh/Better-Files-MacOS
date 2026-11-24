@@ -262,6 +262,13 @@ final class AppModel {
 
     var trashURL: URL { FileOps.canonical(trashDir ?? home.appendingPathComponent(".Trash")) }
 
+    /// Every Trash Empty Trash covers: the home one, plus each drive's own (the system Trash puts an item from
+    /// a drive in that drive's `.Trashes/<uid>`).
+    var trashURLs: [URL] {
+        guard trashDir == nil else { return [trashURL] }
+        return [trashURL] + volumes.map { (v: URL) -> URL in v.appendingPathComponent(".Trashes/\(getuid())") }
+    }
+
     // MARK: Navigation
 
     func open(_ url: URL) {
@@ -654,9 +661,9 @@ extension AppModel {
 
     /// F5.3: same disk moves, another disk copies, ⌥ always copies. F8.2: from a pane always moves.
     func drop(_ urls: [URL], into folder: URL) async {
-        guard let first = urls.first else { return }
+        guard !urls.isEmpty else { return }
         let copy: Bool = NSEvent.modifierFlags.contains(.option)
-            || (!isAcrossPanes(urls, to: folder) && !Self.sameVolume(first, folder))
+            || (!isAcrossPanes(urls, to: folder) && !urls.allSatisfy { (u: URL) -> Bool in Self.sameVolume(u, folder) })
         _ = await runTransfer(urls, to: folder, mode: copy ? .copy : .move)
     }
 
@@ -727,8 +734,9 @@ extension AppModel {
     func cancelRename() { pane.renaming = nil }
 
     func commitRename(_ url: URL, to newName: String) {
-        guard pane.renaming == url.path else { return } // already committed (Return, then focus loss)
-        pane.renaming = nil
+        // The pane that shows the field, not the active one: a click in another pane may have moved focus first.
+        guard let owner = panes.first(where: { (p: PaneModel) -> Bool in p.renaming == url.path }) else { return } // already committed
+        owner.renaming = nil
         let old: String = url.lastPathComponent
         guard newName != old else { return }
         if let problem = Rename.validate(newName) {
@@ -809,10 +817,15 @@ extension AppModel {
     /// Reads the Trash off the main actor (it can be huge). A Trash macOS won't let us list is reported
     /// as needing Full Disk Access, never as empty.
     func askEmptyTrash() {
-        let trash: URL = trashURL
+        let trashes: [URL] = trashURLs
         Task {
             let read: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
-                () -> Result<(count: Int, bytes: Int64), Error> in Result { try FileOps.trashSummary(trash) }
+                () -> Result<(count: Int, bytes: Int64), Error> in Result {
+                    try trashes.reduce((count: 0, bytes: Int64(0))) { (sum: (count: Int, bytes: Int64), url: URL) in
+                        let s = try FileOps.trashSummary(url)
+                        return (sum.count + s.count, sum.bytes + s.bytes)
+                    }
+                }
             }.value
             switch read {
             case .success(let summary) where summary.count == 0:
@@ -836,10 +849,17 @@ extension AppModel {
 
     /// Only ever called from the "Empty the Trash?" alert: the one permanent delete.
     func emptyTrash() {
-        let trash: URL = trashURL
+        let trashes: [URL] = trashURLs
         Task {
             let done: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
-                () -> Result<(count: Int, bytes: Int64), Error> in Result { try FileOps.emptyTrash(trash) }
+                () -> Result<(count: Int, bytes: Int64), Error> in Result {
+                    // A drive that never had anything trashed has no Trash: nothing to empty there.
+                    try trashes.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
+                        .reduce((count: 0, bytes: Int64(0))) { (sum: (count: Int, bytes: Int64), url: URL) in
+                            let d = try FileOps.emptyTrash(url)
+                            return (sum.count + d.count, sum.bytes + d.bytes)
+                        }
+                }
             }.value
             switch done {
             case .success(let d): toast("Deleted \(Self.items(d.count)) for good", undoable: false)

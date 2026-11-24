@@ -177,9 +177,15 @@ public enum Bookmarks {
         if host.hasSuffix(".") { host.removeLast() }
         guard !host.isEmpty, host != "localhost", !host.hasSuffix(".localhost"), !host.hasSuffix(".local"),
               !host.hasSuffix(".internal") else { return false }
-        if host.contains(":") { // IPv6 literal
-            let blocked = ["fe8", "fe9", "fea", "feb", "fc", "fd", "ff", "::ffff:", "64:ff9b:"]
-            return host != "::" && host != "::1" && !blocked.contains { host.hasPrefix($0) }
+        if host.contains(":") { // IPv6 literal: judged by its bytes, so "0:0:0:0:0:0:0:1" is loopback too
+            var addr = in6_addr()
+            guard inet_pton(AF_INET6, host, &addr) == 1 else { return false } // also zone ids ("fe80::1%en0")
+            let b = withUnsafeBytes(of: &addr) { Array($0) }
+            if b[0..<12].allSatisfy({ $0 == 0 }) { return false } // ::, ::1 and IPv4-compatible
+            if b[0..<10].allSatisfy({ $0 == 0 }), b[10] == 0xFF, b[11] == 0xFF { return false } // IPv4-mapped
+            if b[0] == 0xFE && b[1] & 0xC0 == 0x80 { return false } // link-local fe80::/10
+            if b[0] & 0xFE == 0xFC || b[0] == 0xFF { return false } // unique local, multicast
+            return b[0..<4] != [0x00, 0x64, 0xFF, 0x9B] // NAT64 64:ff9b::/96
         }
         let labels = host.split(separator: ".", omittingEmptySubsequences: false)
         guard let last = labels.last, last.allSatisfy(\.isNumber) || last.hasPrefix("0x") else { return true }

@@ -7,10 +7,18 @@ public struct CleanItem: Sendable, Hashable, Identifiable {
     public var bytes: Int64
     public var ticked: Bool
     public var note: String?
+    /// Duplicates: the copy that stays. The spare may go only while that copy is still there and the same.
+    public var keep: URL?
     public var id: String { url.path }
 
-    public init(url: URL, bytes: Int64, ticked: Bool, note: String? = nil) {
-        self.url = url; self.bytes = bytes; self.ticked = ticked; self.note = note
+    public init(url: URL, bytes: Int64, ticked: Bool, note: String? = nil, keep: URL? = nil) {
+        self.url = url; self.bytes = bytes; self.ticked = ticked; self.note = note; self.keep = keep
+    }
+
+    /// Checked again just before trashing: the disk may have changed since the scan.
+    public var stillSafeToTrash: Bool {
+        guard let keep else { return true }
+        return !SmartClean.sameFile(keep, url) && SmartClean.identical(keep, url)
     }
 }
 
@@ -80,7 +88,7 @@ public enum SmartClean {
 
     /// Applications folders searched for installed and unused apps.
     public static func applicationDirs(home: URL) -> [URL] {
-        [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]
+        [URL(fileURLWithPath: "/Applications"), URL(fileURLWithPath: "/System/Applications"), home.appendingPathComponent("Applications")]
     }
 
     /// App name (no ".app") → bundle, from the top level of `dirs`.
@@ -159,9 +167,9 @@ public enum SmartClean {
             let keys = apps.keys.map(letters)
             return topLevel(home.appendingPathComponent("Library/Application Support")).filter { e in
                 let name = letters(e.name)
-                return e.isDirectory && name.count >= 3 && !e.name.hasPrefix("com.apple")
-                    && now.timeIntervalSince(e.modified) > 90 * day
+                return e.isDirectory && name.count >= 3 && !e.name.hasPrefix("com.apple") && !systemSupport.contains(e.name)
                     && !keys.contains(where: { $0.hasPrefix(name) || name.hasPrefix($0) })
+                    && untouched(e.url, since: now.addingTimeInterval(-90 * day))
             }.map(item)
         case .bigFiles:
             return files.filter { $0.size > 500_000_000 && now.timeIntervalSince($0.modified) > 180 * day }
@@ -185,6 +193,42 @@ public enum SmartClean {
         }
     }
 
+    /// macOS's own data in Application Support (Contacts, iPhone backups …), never an app's leftovers.
+    // shortcut: a fixed list of the folders macOS makes; read bundle IDs from Containers if others show up
+    static let systemSupport: Set<String> = [
+        "AddressBook", "MobileSync", "CallHistoryDB", "CallHistoryTransactions", "Knowledge", "CrashReporter",
+        "CloudDocs", "FileProvider", "SyncServices", "Dock", "DiskImages", "Animoji", "iLifeMediaBrowser", "icdd",
+        "accountsd", "networkserviceproxy", "familycircled", "identityservicesd", "Mail", "Safari", "Photos",
+        "Messages", "FaceTime", "Calendars", "Notes", "Reminders", "Shortcuts", "Siri", "Wallpaper", "Bluetooth",
+    ]
+
+    /// Nothing inside `dir` changed since `since` (a folder's own date misses changes deeper down). A tree too
+    /// big to look through counts as touched, so it's never offered on a guess.
+    static func untouched(_ dir: URL, since: Date, maxEntries: Int = 20_000) -> Bool {
+        var stack = [dir], looked = 0
+        while let d = stack.popLast() {
+            guard let a = try? FileManager.default.attributesOfItem(atPath: d.path),
+                  (a[.modificationDate] as? Date ?? .distantFuture) < since else { return false }
+            guard a[.type] as? FileAttributeType == .typeDirectory else { continue }
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? [] {
+                looked += 1
+                if looked > maxEntries { return false }
+                let url = d.appendingPathComponent(name)
+                let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+                if type != .typeSymbolicLink { stack.append(url) }
+            }
+        }
+        return true
+    }
+
+    /// The same file on disk (a hard link), so trashing one frees nothing.
+    static func sameFile(_ a: URL, _ b: URL) -> Bool {
+        guard let x = try? FileManager.default.attributesOfItem(atPath: a.path),
+              let y = try? FileManager.default.attributesOfItem(atPath: b.path) else { return false }
+        return (x[.systemFileNumber] as? NSNumber) == (y[.systemFileNumber] as? NSNumber)
+            && (x[.systemNumber] as? NSNumber) == (y[.systemNumber] as? NSNumber)
+    }
+
     public static let staleNodeModulesNote = "Stale node_modules, untouched for 6 months"
 
     /// Byte-identical files of the same size. Keeps the oldest of each set (on a tie, the one not named like a
@@ -198,6 +242,7 @@ public enum SmartClean {
             var sets: [[FileRecord]] = []
             for f in sameSize.sorted(by: { $0.url.path < $1.url.path }) {
                 if Task.isCancelled { return (out, kept) }
+                if sets.contains(where: { $0.contains { sameFile($0.url, f.url) } }) { continue } // a hard link frees nothing
                 if let i = sets.firstIndex(where: { identical($0[0].url, f.url) }) { sets[i].append(f) } else { sets.append([f]) }
             }
             for set in sets where set.count > 1 {
@@ -210,7 +255,7 @@ public enum SmartClean {
                 kept.append(keep.url)
                 for f in set where f.url != keep.url {
                     let note = "Same as “\(keep.url.lastPathComponent)” in \(keep.url.deletingLastPathComponent().lastPathComponent)"
-                    out.append(CleanItem(url: f.url, bytes: f.size, ticked: inDownloadsOrDesktop(f) || copyNamed(f), note: note))
+                    out.append(CleanItem(url: f.url, bytes: f.size, ticked: inDownloadsOrDesktop(f) || copyNamed(f), note: note, keep: keep.url))
                 }
             }
         }

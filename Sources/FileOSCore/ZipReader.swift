@@ -96,7 +96,8 @@ public enum ZipReader {
             guard next <= cd.count else { throw ZipError.damaged }
             let raw = cd[(p + 46)..<(p + 46 + n)]
             let name = String(bytes: raw, encoding: .utf8) ?? String(bytes: raw, encoding: .isoLatin1) ?? ""
-            let mode = u32(cd, p + 38) >> 16
+            // The mode bits only mean something when the "made by" host is Unix (3).
+            let mode = cd[p + 5] == 3 ? u32(cd, p + 38) >> 16 : 0
             out.append(ZipEntry(name: name, encrypted: flags & 1 != 0, isLink: mode & 0o170000 == 0o120000))
             p = next
         }
