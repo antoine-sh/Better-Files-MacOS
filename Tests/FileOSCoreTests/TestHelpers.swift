@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+@testable import FileOSCore
 
 func makeTempDir() -> URL {
     let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fileos-\(UUID().uuidString)")
@@ -16,7 +17,6 @@ func touch(_ dir: URL, _ rel: String, _ content: String = "x", modified: Date? =
     return url
 }
 
-@testable import FileOSCore
 
 /// Answers each command from a closure; records nothing and runs nothing.
 struct ScriptedRunner: CommandRunner {

@@ -20,8 +20,10 @@ extension AppModel {
         return await SystemInfo.collect(runner: runner, home: home, hideNames: hideNames, macName: name, displays: displays)
     }
 
-    func copyAboutText(_ groups: [InfoGroup]) {
-        Pasteboard.write(SystemInfo.asText(groups))
+    /// Scrubs again when names are hidden, so text copied before a re-read finishes has no names either.
+    func copyAboutText(_ groups: [InfoGroup], hideNames: Bool) {
+        let shown: [InfoGroup] = hideNames ? SystemInfo.scrub(groups, macName: macName) : groups
+        Pasteboard.write(SystemInfo.asText(shown))
         toast("Copied About This Mac", undoable: false)
     }
 }
@@ -46,8 +48,14 @@ struct AboutMacView: View {
         }
         .navigationTitle("About This Mac")
         .toolbar { toolbar }
-        .onChange(of: hide) { model.setHideNames(hide) }
+        .onChange(of: hide) { hideChanged() }
         .task(id: hide) { await keepReading() }
+    }
+
+    /// Hiding applies at once to what is on screen; the re-read follows.
+    private func hideChanged() {
+        model.setHideNames(hide)
+        if hide { groups = SystemInfo.scrub(groups, macName: model.macName) }
     }
 
     /// Only while visible: the task ends when the page goes away.
@@ -61,7 +69,7 @@ struct AboutMacView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Toggle("Hide Names", isOn: $hide)
-            Button("Copy as Text", action: { model.copyAboutText(groups) })
+            Button("Copy as Text", action: { model.copyAboutText(groups, hideNames: hide) })
                 .disabled(groups.isEmpty)
         }
     }

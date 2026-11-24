@@ -109,6 +109,35 @@ final class AgentsTests: XCTestCase {
         XCTAssertEqual(Agents.claudeUsage(home: makeTempDir(), now: now).month, 0)
     }
 
+    func testUsageReadsTheEndOfALargeLogNewestFirst() throws {
+        let home = makeTempDir()
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let old = String(repeating: #"{"type":"assistant","note":"padding"}"# + "\n", count: 200)
+        let today = #"{"timestamp":"\#(stamp)","message":{"id":"t","usage":{"input_tokens":3,"output_tokens":4}}}"#
+        touch(home, ".claude/projects/p/big.jsonl", old + today + "\n")
+        let u = Agents.claudeUsage(home: home, now: Date(), maxLogBytes: 1_000, maxTotalBytes: 1_000)
+        XCTAssertEqual(u.today, 7)
+        // An older file walked first can't spend the budget meant for the newest.
+        touch(home, ".claude/projects/a/older.jsonl", old, modified: Date().addingTimeInterval(-86_400))
+        XCTAssertEqual(Agents.claudeUsage(home: home, now: Date(), maxLogBytes: 1_000, maxTotalBytes: 1_000).today, 7)
+    }
+
+    func testCopySetupRefusesASymlinkedDestination() throws {
+        let from = makeTempDir(), to = makeTempDir(), elsewhere = makeTempDir()
+        touch(from, ".claude/settings.json", "{}")
+        touch(from, "CLAUDE.md", "x")
+        try FileManager.default.createSymbolicLink(at: to.appendingPathComponent(".claude"), withDestinationURL: elsewhere)
+        let plan = Agents.copySetupPlan(from: from, to: to, agent: .claude)
+        XCTAssertThrowsError(try Agents.copySetup(plan, from: from, to: to, replace: true))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: elsewhere.appendingPathComponent("settings.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: to.appendingPathComponent("CLAUDE.md").path), "rolled back")
+        // A symlinked folder in the source isn't followed either.
+        let src = makeTempDir(), secret = makeTempDir()
+        touch(secret, "x.md", "secret")
+        try FileManager.default.createSymbolicLink(at: src.appendingPathComponent(".claude"), withDestinationURL: secret)
+        XCTAssertTrue(Agents.copySetupPlan(from: src, to: to, agent: .claude).isEmpty)
+    }
+
     func testProjectsFromClaudeConfig() throws {
         let home = makeTempDir(), proj = makeTempDir()
         touch(home, ".claude.json", #"{"projects":{"\#(proj.path)":{},"/no/such/place":{}},"mcpServers":{"g":{"command":"x"}}}"#)

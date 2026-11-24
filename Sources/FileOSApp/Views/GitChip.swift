@@ -14,12 +14,14 @@ extension AppModel {
     }
 
     static func gitChipText(_ s: GitStatus) -> String {
-        s.files.isEmpty ? s.title : "\(s.title) · \(s.files.count)"
+        s.files.isEmpty || !s.countsKnown ? s.title : "\(s.title) · \(s.files.count)"
     }
 
     static func gitCounts(_ s: GitStatus) -> String {
         "\(s.changed) changed, \(s.added) new, \(s.deleted) deleted"
     }
+
+    static let gitNotCounted = "Changes aren't counted here: this repository's settings would run programs."
 
     static let gitInstallCommand = "xcode-select --install"
 }
@@ -40,7 +42,7 @@ struct GitChip: View {
             chip(text: "Git", symbol: "exclamationmark.triangle", label: "Git isn't installed")
         case .status(let s):
             chip(text: AppModel.gitChipText(s), symbol: "arrow.triangle.branch",
-                 label: "Git branch \(s.title), \(s.files.count) uncommitted")
+                 label: s.countsKnown ? "Git branch \(s.title), \(s.files.count) uncommitted" : "Git branch \(s.title)")
         }
     }
 
@@ -113,7 +115,9 @@ private struct GitStatusPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(status.title, systemImage: "arrow.triangle.branch").font(.headline)
-            if status.files.isEmpty {
+            if !status.countsKnown {
+                Text(AppModel.gitNotCounted).foregroundStyle(.secondary)
+            } else if status.files.isEmpty {
                 Text("Everything is committed.").foregroundStyle(.secondary)
             } else {
                 Text(AppModel.gitCounts(status))

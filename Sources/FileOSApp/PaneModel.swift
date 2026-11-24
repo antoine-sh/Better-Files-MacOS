@@ -38,6 +38,8 @@ struct RowSection: Identifiable {
 final class PaneModel {
     private(set) var url: URL
     private(set) var entries: [Entry] = []
+    /// Bumped on every listing, so the git chip can look again without diffing entries.
+    private(set) var generation = 0
     var selection: Set<Entry.ID> = []
     var view: ViewMode = .list
     private(set) var prefs = FolderPrefs()
@@ -191,6 +193,7 @@ final class PaneModel {
     }
 
     func reload() {
+        generation += 1
         do {
             entries = try FileOps.listDirectory(url, showHidden: showHidden)
             error = nil

@@ -28,6 +28,8 @@ final class SystemInfoTests: XCTestCase {
     func testScrubAndParsers() {
         let g = [InfoGroup(title: "T", rows: [InfoRow(label: "Path", value: "/Users/ada/x on ada-mbp", status: .ok)])]
         XCTAssertEqual(SystemInfo.scrub(g, user: "ada", host: "ada-mbp", mac: nil)[0].rows[0].value, "/Users/you/x on this-mac")
+        let words = [InfoGroup(title: "Memory", rows: [InfoRow(label: "Installed", value: "Memory by mem, MEM-2 and mem.")])]
+        XCTAssertEqual(SystemInfo.scrub(words, user: "mem", host: "", mac: nil)[0].rows[0].value, "Memory by you, you-2 and you.")
         XCTAssertEqual(SystemInfo.parseBattery("-InternalBattery-0 (id=1)\t87%; charging; 0:40 remaining")?.value, "87%, charging")
         XCTAssertEqual(SystemInfo.parseBattery("-InternalBattery-0 (id=1)\t8%; discharging;")?.status, .bad)
         XCTAssertNil(SystemInfo.parseBattery("Now drawing from 'AC Power'\n"))

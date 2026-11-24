@@ -66,6 +66,17 @@ final class PackagesTests: XCTestCase {
         XCTAssertNil(go[0].removeCommand)
     }
 
+    #if os(macOS)
+    func testPipAndGemNeedTheDeveloperTools() async {
+        let runner = ScriptedRunner { exe, _ in
+            if exe == "xcode-select" { return (2, "") }
+            XCTAssertFalse(exe == "pip3" || exe == "gem", "ran the \(exe) stub")
+            throw CommandError.notFound(exe)
+        }
+        _ = await Packages.list(runner: runner, home: makeTempDir())
+    }
+    #endif
+
     func testListSkipsMissingToolsAndRunsOnlyListCommands() async {
         let home = makeTempDir()
         let runner = ScriptedRunner { exe, args in

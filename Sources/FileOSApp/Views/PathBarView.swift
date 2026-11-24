@@ -25,7 +25,7 @@ struct PathBarView: View {
     }
 
     /// Looks again when the folder changes or its listing does (a file saved, added or removed).
-    private var gitKey: String { "\(pane.url.path)|\(pane.entries.count)|\(pane.entries.map { (e: Entry) -> Date in e.modified }.max()?.timeIntervalSince1970 ?? 0)" }
+    private var gitKey: String { "\(pane.url.path)|\(pane.generation)" }
 
     private func loadGit() async {
         let url: URL = pane.url

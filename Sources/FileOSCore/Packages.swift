@@ -220,6 +220,12 @@ public enum Packages {
 
     static func load(_ tool: Tool, runner: CommandRunner, home: URL) async -> ToolPackages? {
         let cmd = tool.listCommand(home: home)
+        #if os(macOS)
+        // /usr/bin/pip3 and the system Ruby's tools offer to install the developer tools when they're missing.
+        if tool == .pip || tool == .gem {
+            guard let dev = try? await runner.run("xcode-select", ["-p"], timeout: 5), dev.status == 0 else { return nil }
+        }
+        #endif
         guard let out = try? await runner.run(cmd.exe, cmd.args, timeout: 60), out.status == 0 else { return nil }
         var extra: String?
         if let e = tool.extraCommand(), let r = try? await runner.run(e.exe, e.args, timeout: 60), r.status == 0 { extra = r.stdout }

@@ -58,6 +58,15 @@ public struct SetupPlanItem: Sendable, Equatable, Identifiable {
     public var id: String { path }
 }
 
+public enum SetupError: Error, LocalizedError, Equatable {
+    case outsideProject(String)
+    public var errorDescription: String? {
+        switch self {
+        case .outsideProject(let p): return "“\(p)” would be written outside the project, through a link"
+        }
+    }
+}
+
 /// One file FileOS wrote, and what it held before (nil: it didn't exist), so undo can put it back.
 public struct SetupWrite: Sendable, Equatable {
     public let url: URL
@@ -114,6 +123,18 @@ public enum Agents {
         return out.sorted()
     }
 
+    /// `rel` under `root` resolves inside `root`: no symlink along the way (or at the end) leads out.
+    static func staysInside(_ rel: String, root: URL) -> Bool {
+        let base = root.resolvingSymlinksInPath().standardizedFileURL.path
+        var url = root.appendingPathComponent(rel)
+        if let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType,
+           type == .typeSymbolicLink { return false }
+        // The nearest part of the path that exists decides where a new file would land.
+        while !exists(url), url.path.count > root.path.count { url = url.deletingLastPathComponent() }
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return resolved == base || resolved.hasPrefix(base + "/")
+    }
+
     private static func exists(_ url: URL) -> Bool {
         (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil
     }
@@ -122,7 +143,7 @@ public enum Agents {
 
     public static func copySetupPlan(from: URL, to: URL, agent: Agent) -> [SetupPlanItem] {
         let paths = (files[agent] ?? []).flatMap { regularFiles($0, in: from) }
-            .filter { !personal.contains(($0 as NSString).lastPathComponent) }
+            .filter { !personal.contains(($0 as NSString).lastPathComponent) && staysInside($0, root: from) }
         return Array(Set(paths)).sorted().map { SetupPlanItem(path: $0, state: exists(to.appendingPathComponent($0)) ? "already there" : "new") }
     }
 
@@ -133,6 +154,8 @@ public enum Agents {
         do {
             for item in plan where !personal.contains((item.path as NSString).lastPathComponent) {
                 let dest = to.appendingPathComponent(item.path)
+                // Never write through a symlinked folder (or file) out of the destination project.
+                guard staysInside(item.path, root: to) else { throw SetupError.outsideProject(item.path) }
                 if exists(dest) && !replace { continue } // also covers a file that appeared since the plan
                 let data = try Data(contentsOf: from.appendingPathComponent(item.path))
                 writes.append(try write(data, to: dest))
@@ -261,12 +284,12 @@ public enum Agents {
     // MARK: Claude Code usage
 
     static let maxLogFiles = 2_000
-    static let maxLogBytes = 20 << 20
-    static let maxTotalBytes = 300 << 20
 
     /// Input + output tokens in ~/.claude/projects/**/*.jsonl for today, the last 7 days and the last 30 days.
-    /// Bounded: files older than 30 days are skipped, and file count and bytes read are capped.
-    public static func claudeUsage(home: URL, now: Date) -> (today: Int, week: Int, month: Int) {
+    /// Bounded: files older than 30 days are skipped, the newest files are read first, and only the last
+    /// `maxLogBytes` of each (logs are append-only, so that's the recent part) within `maxTotalBytes` overall.
+    public static func claudeUsage(home: URL, now: Date, maxLogBytes: Int = 20 << 20,
+                                   maxTotalBytes: Int = 300 << 20) -> (today: Int, week: Int, month: Int) {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         let weekStart = cal.date(byAdding: .day, value: -6, to: today) ?? today
@@ -278,10 +301,9 @@ public enum Agents {
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let isoPlain = ISO8601DateFormatter()
         for url in logFiles(home.appendingPathComponent(".claude/projects"), since: monthStart) {
-            guard budget > 0, let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { continue }
-            let slice = data.prefix(min(maxLogBytes, budget))
-            budget -= slice.count
-            for line in slice.split(separator: UInt8(ascii: "\n")) {
+            guard budget > 0, let data = tail(url, max: min(maxLogBytes, budget)) else { continue }
+            budget -= data.count
+            for line in data.split(separator: UInt8(ascii: "\n")) {
                 guard let obj = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
                       let message = obj["message"] as? [String: Any], let usage = message["usage"] as? [String: Any],
                       let stamp = obj["timestamp"] as? String,
@@ -297,11 +319,24 @@ public enum Agents {
         return totals
     }
 
+    /// The last `max` bytes, starting after the first newline when the file was cut (no partial line).
+    static func tail(_ url: URL, max: Int) -> Data? {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? h.close() }
+        guard let size = try? h.seekToEnd() else { return nil }
+        let start = size > UInt64(max) ? size - UInt64(max) : 0
+        guard (try? h.seek(toOffset: start)) != nil, let data = try? h.readToEnd() else { return nil }
+        guard start > 0 else { return data }
+        guard let nl = data.firstIndex(of: UInt8(ascii: "\n")) else { return Data() }
+        return data[data.index(after: nl)...]
+    }
+
+    /// Newest first, so the byte budget goes to recent logs.
     private static func logFiles(_ root: URL, since: Date) -> [URL] {
-        var out: [URL] = []
+        var out: [(url: URL, modified: Date)] = []
         var stack = [root]
         var visited = 0
-        while let dir = stack.popLast(), out.count < maxLogFiles, visited < 20_000 {
+        while let dir = stack.popLast(), visited < 20_000 {
             for name in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] {
                 visited += 1
                 let url = dir.appendingPathComponent(name)
@@ -309,11 +344,11 @@ public enum Agents {
                 switch a[.type] as? FileAttributeType {
                 case .typeDirectory?: stack.append(url)
                 case .typeRegular? where name.hasSuffix(".jsonl"):
-                    if let m = a[.modificationDate] as? Date, m >= since, out.count < maxLogFiles { out.append(url) }
+                    if let m = a[.modificationDate] as? Date, m >= since { out.append((url, m)) }
                 default: break // symlinks aren't followed
                 }
             }
         }
-        return out
+        return out.sorted { $0.modified > $1.modified }.prefix(maxLogFiles).map(\.url)
     }
 }

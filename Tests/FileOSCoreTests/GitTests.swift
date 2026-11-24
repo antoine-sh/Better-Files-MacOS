@@ -44,14 +44,42 @@ final class GitTests: XCTestCase {
         let runner = ScriptedRunner { exe, args in
             if exe == "xcode-select" { return (0, "/x\n") }
             XCTAssertEqual(exe, "git")
-            XCTAssertEqual(Array(args.prefix(3)), ["--no-optional-locks", "-C", dir.path])
+            XCTAssertEqual(Array(args.prefix(5)), ["--no-optional-locks", "-c", "core.fsmonitor=false", "-C", dir.path])
             XCTAssertTrue(args.contains("status") || args.contains("describe"))
             if args.contains("describe") { return (0, "v2\n") }
-            return (0, "## main\n M a\n")
+            XCTAssertTrue(args.contains("-z") || args.contains("describe"))
+            return (0, "## main\0 M a\0")
         }
         guard case .status(let s) = await Git.status(dir, runner: runner) else { return XCTFail() }
         XCTAssertEqual(s.tag, "v2")
         XCTAssertEqual(s.changed, 1)
+    }
+
+    func testParseNulSeparated() {
+        let s = Git.parse("## main...origin/main\0R  new name\0old name\0?? a -> b\0 M \"q\".txt\0", tag: nil)
+        XCTAssertEqual(s.files.map(\.path), ["new name", "a -> b", "\"q\".txt"])
+        XCTAssertEqual([s.changed, s.added, s.deleted], [2, 1, 0])
+    }
+
+    func testRepoWithFiltersNeverRunsStatus() async throws {
+        let dir = makeTempDir()
+        touch(dir, ".git/HEAD", "ref: refs/heads/feature/x\n")
+        touch(dir, ".git/config", "[core]\n\tbare = false\n[filter \"evil\"]\n\tclean = ./run-me\n")
+        let runner = ScriptedRunner { exe, args in
+            XCTAssertFalse(args.contains("status"), "ran \(exe) \(args)")
+            return (0, "/x\n")
+        }
+        guard case .status(let s) = await Git.status(dir.appendingPathComponent("sub"), runner: runner) else { return XCTFail() }
+        XCTAssertEqual(s.branch, "feature/x")
+        XCTAssertFalse(s.countsKnown)
+        // A worktree's .git file points at the real git dir; an include could bring filters in too.
+        let wt = makeTempDir(), gitDir = makeTempDir()
+        touch(gitDir, "HEAD", "0123abcd\n")
+        touch(gitDir, "config", "[include]\n\tpath = ../x\n")
+        touch(wt, ".git", "gitdir: \(gitDir.path)\n")
+        guard case .status(let w) = await Git.status(wt, runner: runner) else { return XCTFail() }
+        XCTAssertEqual(w.branch, "HEAD")
+        XCTAssertFalse(w.countsKnown)
     }
 
     func testRealGit() async throws {

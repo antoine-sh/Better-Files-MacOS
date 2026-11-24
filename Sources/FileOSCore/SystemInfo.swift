@@ -78,11 +78,24 @@ public enum SystemInfo {
                 if g.rows[i].label == "Signed in as" { g.rows[i].value = "you@this-mac"; continue }
                 if g.title == "This Mac" && g.rows[i].label == "Name" { g.rows[i].value = "this-mac"; continue }
                 for (name, replacement) in sorted {
-                    g.rows[i].value = g.rows[i].value.replacingOccurrences(of: name, with: replacement, options: .caseInsensitive)
+                    g.rows[i].value = replaceWord(name, with: replacement, in: g.rows[i].value)
                 }
             }
             return g
         }
+    }
+
+    /// Hide Names with this Mac's own names, for groups already on screen.
+    public static func scrub(_ groups: [InfoGroup], macName: String?) -> [InfoGroup] {
+        scrub(groups, user: NSUserName(), host: hostName(), mac: macName)
+    }
+
+    /// Whole words only, ignoring case: "mem" goes, "Memory" stays.
+    static func replaceWord(_ word: String, with replacement: String, in text: String) -> String {
+        let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: word) + "(?![\\p{L}\\p{N}])"
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return text }
+        return re.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
+                                           withTemplate: NSRegularExpression.escapedTemplate(for: replacement))
     }
 
     public static func asText(_ groups: [InfoGroup]) -> String {

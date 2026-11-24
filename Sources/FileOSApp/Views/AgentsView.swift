@@ -9,11 +9,14 @@ final class SetupEditor {
     var text: String
     private(set) var saved: String
     var editing = false
+    /// "Too large to preview" / "Can't read": shown instead of the text, and Edit is off.
+    let problem: String?
 
-    init(url: URL, text: String) {
+    init(url: URL, text: String, problem: String? = nil) {
         self.url = url
         self.text = text
         saved = text
+        self.problem = problem
     }
 
     var isEdited: Bool { text != saved }
@@ -99,12 +102,17 @@ final class AgentsModel {
     func open(_ rel: String) {
         guard let project = selected, editor?.isEdited != true else { return }
         let url: URL = project.appendingPathComponent(rel)
-        // shortcut: setup files are small; read on the main actor. Cap so a huge file can't stall it.
-        guard let data = try? Data(contentsOf: url), data.count <= 2 << 20 else {
-            editor = SetupEditor(url: url, text: "")
-            return
+        editor = Self.load(url)
+    }
+
+    // shortcut: setup files are small; read on the main actor, checking the size before reading.
+    static func load(_ url: URL) -> SetupEditor {
+        let size: Int = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+        if size > 2 << 20 { return SetupEditor(url: url, text: "", problem: "Too large to preview") }
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else {
+            return SetupEditor(url: url, text: "", problem: "Can't read")
         }
-        editor = SetupEditor(url: url, text: String(decoding: data, as: UTF8.self))
+        return SetupEditor(url: url, text: text)
     }
 }
 
@@ -113,13 +121,16 @@ extension AppModel {
         await agents.load(runner: runner, home: home, current: pane.currentFolder)
     }
 
-    /// Save: atomic; undo puts back what the file held, unless it changed again since.
+    /// Save: atomic. Undo puts back what the file really held just before (even if another app changed it
+    /// since it was opened), unless it changed again after the save.
     func saveSetupFile() {
-        guard let editor = agents.editor, editor.isEdited else { return }
+        guard let editor = agents.editor, editor.isEdited, editor.problem == nil else { return }
         let written: String = editor.text
-        let previous: String = editor.saved
+        let name: String = editor.url.lastPathComponent
         do {
             let write: SetupWrite = try Agents.write(Data(written.utf8), to: editor.url)
+            let previous: String = write.previous.map { (d: Data) -> String in String(decoding: d, as: UTF8.self) } ?? ""
+            let changedElsewhere: Bool = previous != editor.saved
             editor.markSaved(written)
             let trashDir: URL? = self.trashDir
             undo.push("Save") {
@@ -127,9 +138,9 @@ extension AppModel {
                 if result.failed.isEmpty { await editor.undoSave(to: previous, from: written) }
                 return result
             }
-            toast("Saved “\(editor.url.lastPathComponent)”", undoable: true)
+            toast(changedElsewhere ? "Saved “\(name)” over changes made elsewhere" : "Saved “\(name)”", undoable: true)
         } catch {
-            toast("Couldn't save “\(editor.url.lastPathComponent)”: \(error.localizedDescription)", undoable: false)
+            toast("Couldn't save “\(name)”: \(error.localizedDescription)", undoable: false)
         }
     }
 
@@ -359,7 +370,7 @@ private struct SetupFileRow: View {
         let url: URL = project.appendingPathComponent(rel)
         if agents.editor?.url != url { agents.open(rel) }
         if let editor = agents.editor, editor.url == url {
-            editor.editing = edit
+            editor.editing = edit && editor.problem == nil
         } else {
             model.toast("Save or revert “\(agents.editor?.url.lastPathComponent ?? "")” first", undoable: false)
         }
@@ -377,6 +388,7 @@ private struct SetupEditorView: View {
                 if editor.isEdited { Text("Edited").font(.caption).foregroundStyle(.orange) }
                 Spacer()
                 Toggle("Edit", isOn: $editor.editing).toggleStyle(.switch).controlSize(.small)
+                    .disabled(editor.problem != nil)
                 Button("Revert", action: { editor.revert() }).disabled(!editor.isEdited)
                 Button("Save", action: { model.saveSetupFile() }).disabled(!editor.isEdited)
             }
@@ -387,7 +399,9 @@ private struct SetupEditorView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if editor.editing {
+        if let problem = editor.problem {
+            Text(problem).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if editor.editing {
             TextEditor(text: $editor.text).font(.body.monospaced())
         } else {
             ScrollView {

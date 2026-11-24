@@ -871,8 +871,11 @@ enum SelfTest {
         check("Hide Names removes the user name", about.contains("you@this-mac") && !about.contains(NSUserName()))
         let named: String = SystemInfo.asText(await model.aboutThisMac(hideNames: false))
         check("About This Mac lists memory and disk", named.contains("Memory") && named.contains("Disk"))
-        model.copyAboutText(await model.aboutThisMac(hideNames: true))
-        check("Copy as Text", Pasteboard.string()?.hasPrefix("About This Mac") == true && said("Copied About This Mac"))
+        // Hide Names just turned on, the re-read not done yet: the copy still has no names.
+        model.copyAboutText(await model.aboutThisMac(hideNames: false), hideNames: true)
+        let copied: String = Pasteboard.string() ?? ""
+        check("Copy as Text hides names at once", copied.hasPrefix("About This Mac") && said("Copied About This Mac")
+                && !copied.contains(NSUserName()) && !copied.contains(SystemInfo.hostName()))
         model.page = .browser
     }
 
@@ -913,6 +916,19 @@ enum SelfTest {
         check("Save writes the setup file", read(claudeMD) == "# New" && agents.editor?.isEdited == false && said("Saved “CLAUDE.md”"))
         await model.undoLast()
         check("undoing Save restores it", read(claudeMD) == "# Rules" && agents.editor?.text == "# Rules")
+
+        try? "outside".write(to: claudeMD, atomically: true, encoding: .utf8)
+        agents.editor?.text = "# Mine"
+        model.saveSetupFile()
+        check("Save over an outside change says so", said("Saved “CLAUDE.md” over changes made elsewhere"))
+        await model.undoLast()
+        check("undo restores the outside change", read(claudeMD) == "outside" && agents.editor?.text == "outside")
+        try? "# Rules".write(to: claudeMD, atomically: true, encoding: .utf8)
+        try? Data(count: 3 << 20).write(to: project.appendingPathComponent("AGENTS.md"))
+        agents.editor = nil
+        agents.open("AGENTS.md")
+        check("a huge setup file isn't previewed", agents.editor?.problem == "Too large to preview")
+        agents.editor = nil
 
         model.planCopySetup(.claude, from: project, to: other)
         let paths: [String] = agents.copying?.plan.map { (i: SetupPlanItem) -> String in i.path } ?? []
