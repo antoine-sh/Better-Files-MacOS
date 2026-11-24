@@ -58,6 +58,7 @@ struct IconGridView: View {
             .onTapGesture(count: 2) { model.openSelection([row.id]) }
             // Simultaneous, so selecting doesn't wait out the double-click interval.
             .simultaneousGesture(TapGesture().onEnded { click(row.id) })
+            .modifier(QuickActionPress(id: row.id, pane: pane))
             .contextMenu { FileContextMenu(ids: menuIDs(row.id)) }
             .draggable(row.entry.url)
             .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in

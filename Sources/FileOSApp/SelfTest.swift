@@ -152,6 +152,7 @@ enum SelfTest {
         await smartChecks(model, check)
         await libraryChecks(model, check)
         await devChecks(model, check)
+        await homeChecks(model, check)
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -972,6 +973,113 @@ enum SelfTest {
         return ok
     }
 
+    /// F15, F16, F5.15 at model level: no global hotkey, panel or status item is made here (only the app
+    /// delegate makes those), so the runner's desktop is never touched.
+    static func homeChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        func reopened() -> AppModel { AppModel(home: home, trashDir: model.trashDir) }
+        func write(_ url: URL) { try? "x".write(to: url, atomically: true, encoding: .utf8) }
+        check("greeting by hour", Greeting.text(hour: 5) == "Good morning" && Greeting.text(hour: 14) == "Good afternoon"
+                && Greeting.text(hour: 20) == "Good evening")
+
+        let inbox: URL = FileOps.canonical(home.appendingPathComponent("Inbox"))
+        let shelfDir: URL = home.appendingPathComponent("ShelfTest")
+        try? fm.createDirectory(at: inbox, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: shelfDir, withIntermediateDirectories: true)
+        let drop: URL = shelfDir.appendingPathComponent("drop.txt")
+        let landed: URL = inbox.appendingPathComponent("drop.txt")
+        write(drop)
+
+        model.pinToShelf([inbox])
+        model.pinToShelf([inbox])
+        check("Pin to Drop Shelf keeps one pin", model.shelfPinned == [inbox])
+        check("the pin survives a relaunch", reopened().shelfPinned.map { (u: URL) -> String in u.path } == [inbox.path])
+        check("the pin shows the folder's count", AppModel.itemCount(inbox) == 0)
+
+        await model.dropShelfMove([drop], to: inbox, copy: false)
+        check("a shelf drop moves the file", !exists(drop) && exists(landed))
+        check("the shelf result line", model.shelfResult?.text == "Just now: Moved “drop.txt” to Inbox"
+                && model.shelfResult?.undoable == true)
+        await model.undoLast()
+        check("undoing the shelf move puts it back", exists(drop) && !exists(landed))
+        await model.dropShelfMove([drop], to: inbox, copy: true)
+        check("an ⌥ shelf drop copies", exists(drop) && exists(landed)
+                && model.shelfResult?.text == "Just now: Copied “drop.txt” to Inbox")
+        await model.undoLast()
+        check("undoing the shelf copy removes only the copy", exists(drop) && !exists(landed))
+
+        let other: URL = shelfDir.appendingPathComponent("other.txt")
+        write(other)
+        model.addToHolding([drop, other])
+        model.addToHolding([drop])
+        check("holding keeps each path once", model.holding.map { (u: URL) -> String in u.lastPathComponent } == ["drop.txt", "other.txt"])
+        check("holding moves nothing", exists(drop) && exists(other))
+        check("holding survives a relaunch", reopened().holding.map { (u: URL) -> String in u.path } == [drop.path, other.path])
+        try? fm.removeItem(at: other)
+        check("holding forgets files that are gone", reopened().holding.map { (u: URL) -> String in u.path } == [drop.path])
+        await model.dropShelfMove(model.holding, to: inbox, copy: false)
+        check("held files dropped on a pin move and leave holding", exists(landed) && model.holding.isEmpty)
+        await model.undoLast()
+        model.addToHolding([drop])
+        model.clearHolding()
+        check("Clear empties holding for good", model.holding.isEmpty && reopened().holding.isEmpty && exists(drop))
+
+        model.addToQuickAccess([inbox])
+        check("Add to Quick Access saves the folder", reopened().quickAccess.map { (u: URL) -> String in u.path } == [inbox.path]
+                && hasToast(model, "Added 1 item to Quick Access"))
+        model.removeFromQuickAccess([inbox])
+        check("Remove from Quick Access", model.quickAccess.isEmpty && reopened().quickAccess.isEmpty)
+        model.addToQuickAccess([inbox])
+        await model.undoLast()
+        check("undoing Add to Quick Access", model.quickAccess.isEmpty)
+        model.unpinFromShelf([inbox])
+        check("Unpin only forgets the pin", reopened().shelfPinned.isEmpty && AppModel.isBrowsableFolder(inbox))
+
+        model.setHomePart(.photoFrame, shown: false)
+        let parts: [String: Bool] = reopened().homeParts
+        check("Customize hides a Home part for good", !HomePart.photoFrame.isShown(in: parts) && HomePart.today.isShown(in: parts))
+        model.page = .home
+        check("the Home page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        model.page = .browser
+
+        check("six quick actions by default", model.quickActions == QuickAction.defaults)
+        model.setQuickActions([.addToHolding, .trash])
+        check("the quick action order is saved", reopened().quickActions == [.addToHolding, .trash])
+        model.showQuickActions(for: [drop])
+        check("⌘. shows the quick actions", model.showQuickActions && model.quickActionTargets == [drop])
+        model.performQuickAction(.addToHolding)
+        check("a quick action runs on its item", !model.showQuickActions && model.holding.map { (u: URL) -> String in u.path } == [drop.path])
+        model.clearHolding()
+        model.setQuickActions(QuickAction.defaults)
+
+        let seen = SeenCombo()
+        model.dropShelfShortcutChanged = { (combo: KeyCombo) in seen.combo = combo }
+        let bare: String? = model.setDropShelfShortcut(KeyCombo(key: "space", shift: true))
+        check("a shelf shortcut needs ⌘, ⌥ or ⌃", bare != nil && seen.combo == nil)
+        let taken: String? = model.setDropShelfShortcut(KeyCombo(key: "k", command: true))
+        check("a shelf shortcut already in use is reported", taken != nil && seen.combo == nil)
+        let wanted = KeyCombo(key: "space", option: true, control: true)
+        let fine: String? = model.setDropShelfShortcut(wanted)
+        check("a new shelf shortcut is saved and re-registered", fine == nil && seen.combo == wanted
+                && reopened().dropShelfShortcut == wanted)
+        check("hotkey key codes", HotKey.keyCode("space") == 49 && HotKey.keyCode("k") == 40 && HotKey.keyCode("f5") == 96
+                && HotKey.modifiers(KeyCombo(key: "space", option: true)) == 0x0800)
+        model.setDropShelfShortcut(KeyCombo(key: "space", option: true))
+        model.dropShelfShortcutChanged = nil
+
+        model.pinToShelf([inbox])
+        model.addToHolding([drop])
+        let shelf = NSHostingView(rootView: DropShelfView(resized: {}).environment(model))
+        shelf.layoutSubtreeIfNeeded()
+        check("the Drop Shelf lays out", shelf.fittingSize.width >= DropShelfController.width - 1 && shelf.fittingSize.height > 100)
+        let menu = NSHostingView(rootView: MenuBarPanel().environment(model))
+        menu.layoutSubtreeIfNeeded()
+        check("the menu bar panel lays out", menu.fittingSize.height > 50)
+        model.unpinFromShelf([inbox])
+        model.clearHolding()
+    }
+
     private static func tableCount(_ model: AppModel) -> Int {
         hostedViews(model).filter { (v: NSView) -> Bool in v is NSTableView }.count
     }
@@ -996,6 +1104,12 @@ enum SelfTest {
         window.contentView = nil
         return all
     }
+}
+
+/// What the app would have re-registered as the global shortcut.
+@MainActor
+private final class SeenCombo {
+    var combo: KeyCombo?
 }
 
 /// Canned answers for the self-test, so it runs no real git, brew, lsof or system tools.

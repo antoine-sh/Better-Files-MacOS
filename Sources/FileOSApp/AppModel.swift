@@ -43,8 +43,9 @@ final class AppModel {
     let undo = UndoStack()
     /// nil: the system Trash. Set for the self-test so nothing lands in the real Trash.
     let trashDir: URL?
-    /// Action id → shortcut, with the user's overrides (F17 Settings > Shortcuts writes "shortcuts").
-    let shortcuts: [String: KeyCombo]
+    /// Action id → shortcut, with the user's overrides (F17 Settings > Shortcuts writes "shortcuts";
+    /// `setDropShelfShortcut` writes the Drop Shelf's).
+    var shortcuts: [String: KeyCombo]
     private(set) var iconSize: IconSize
     private(set) var showPreview: Bool
     var filterShown = false
@@ -126,6 +127,23 @@ final class AppModel {
     var editingPath = false
     var pathError: (name: String, parent: URL, suggestion: String?)?
 
+    // Drop Shelf, Holding, Quick access, Home and quick actions (F15, F16, F5.15); see DropShelf.swift.
+    // Only the setters there write these and their store keys.
+    var shelfPinned: [URL]
+    /// Paths only: holding never copies or moves anything.
+    var holding: [URL]
+    var quickAccess: [URL]
+    var homeParts: [String: Bool]
+    var quickActions: [QuickAction]
+    /// "Just now: Moved “a.txt” to Documents" under the shelf, with Undo.
+    var shelfResult: Toast?
+    var quickActionTargets: [URL] = []
+    var showQuickActions = false
+    /// Set by the app (not the self-test): the panel, the global hotkey and opening a window when none is open.
+    @ObservationIgnored var toggleShelf: (@MainActor () -> Void)?
+    @ObservationIgnored var dropShelfShortcutChanged: (@MainActor (KeyCombo) -> Void)?
+    @ObservationIgnored var openMainWindow: (@MainActor () -> Void)?
+
     // Sidebar
     private(set) var favorites: [URL]
     private(set) var volumes: [URL] = []
@@ -157,6 +175,17 @@ final class AppModel {
         symbolOverrides = store.get(Self.symbolsKey, default: [String: String]())
         colorOverrides = store.get(Self.colorsKey, default: [String: String]())
         savedLayouts = store.get("layouts", default: [SavedLayout]())
+        func urls(_ key: String) -> [URL] {
+            store.get(key, default: [String]()).map { (p: String) -> URL in FileOps.canonical(URL(fileURLWithPath: p)) }
+        }
+        shelfPinned = urls("dropShelf.pinned")
+        let held: [URL] = store.get("holding", default: [String]()).map { (p: String) -> URL in Self.heldURL(URL(fileURLWithPath: p)) }
+        // Held files that were moved or deleted since are forgotten (they were never ours to keep).
+        holding = held.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
+        if holding.count != held.count { store.set("holding", holding.map { (u: URL) -> String in u.path }) }
+        quickAccess = urls("quickAccess")
+        homeParts = store.get("home.widgets", default: [String: Bool]())
+        quickActions = QuickAction.ordered(store.getArray("quickActions", of: String.self))
         // Element by element, so one damaged entry can't cost the rest. The sample "Acme Project" (F11.5) is
         // seeded only when nothing was ever saved; an empty saved list stays empty.
         let savedWorkspaces: [Workspace]? = store.getArray("workspaces", of: Workspace.self)
@@ -173,6 +202,7 @@ final class AppModel {
         transfers.willAsk = { [weak self] in
             self?.showSearch = false
             self?.peek.close()
+            self?.showMainWindow() // a drop on the Drop Shelf may clash with no window open
         }
     }
 

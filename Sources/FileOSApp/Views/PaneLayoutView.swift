@@ -39,7 +39,8 @@ extension AppModel {
     /// keep those keys for themselves; while Peek is up it gets every key first.
     /// Left alone while typing in a field, in ⌘K, renaming, or in a sheet.
     func handlePaneKey(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown else { return false }
+        // The Drop Shelf, the menu bar panel and Quick Look keep their own keys.
+        guard event.type == .keyDown, !(event.window is NSPanel) else { return false }
         if peek.isShown { return handlePeekKey(event) }
         guard event.keyCode == 48 || event.keyCode == 49 else { return false } // kVK_Tab, kVK_Space
         let mods: NSEvent.ModifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)

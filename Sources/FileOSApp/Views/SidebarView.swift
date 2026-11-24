@@ -18,6 +18,7 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
+            SidebarRow(title: "Home", symbol: "house.fill", item: .page(.home)) // F16.1
             WorkspacesSection(open: $workspacesOpen)
             BookmarksSection(open: $bookmarksOpen)
             favorites

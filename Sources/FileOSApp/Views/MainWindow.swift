@@ -15,11 +15,13 @@ struct MainWindow: View {
         .overlay(alignment: .bottomTrailing) { TransferQueueView(queue: model.transfers) }
         .overlay { SearchOverlay() }
         .overlay { PeekOverlay() }
+        .overlay { QuickActionsOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
         .modifier(SmartDialogs(model: model))
         .modifier(LibraryDialogs(model: model))
         .modifier(DevDialogs(model: model, agents: model.agents))
         .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
+        .modifier(WindowOpener(model: model))
     }
 
     private var sidebar: some View {
@@ -39,12 +41,27 @@ struct MainWindow: View {
             InstalledView(installed: model.installed)
         } else if model.page == .agents {
             AgentsView(agents: model.agents)
+        } else if model.page == .home {
+            HomeView()
         } else if model.page == .aboutMac {
             AboutMacView(hideNames: model.hideNames)
         } else if case .workspace(let id) = model.page {
             WorkspacePage(id: id).id(id) // fresh tab, view and search per workspace
         } else {
             PlaceholderPage(title: model.page.title)
+        }
+    }
+}
+
+/// Keeps a way to open a window after every window was closed (F1.6); the menu bar icon sets it too.
+private struct WindowOpener: ViewModifier {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            // The self-test hosts windows outside any app scene, where there is nothing to open.
+            if !AppMain.isSelfTest { model.openMainWindow = { openWindow(id: AppMain.mainWindowID) } }
         }
     }
 }

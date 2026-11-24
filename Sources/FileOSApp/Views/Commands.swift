@@ -118,7 +118,20 @@ private struct FileMenuCommands: Commands {
             itemCommands
             Divider()
             placeCommands
+            Divider()
+            shelfCommands
         }
+    }
+
+    /// F1.4, F5.15, F15: with nothing selected, Pin and Add use the open folder.
+    @ViewBuilder private var shelfCommands: some View {
+        Button("Pin to Drop Shelf", action: { model.pinToShelf(model.targets) })
+        Button("Add to Quick Access", action: { model.addToQuickAccess(model.targets) })
+        Button("Add to Holding", action: { model.addToHolding(model.targets) })
+            .disabled(targets.isEmpty)
+        MenuItem(title: "Quick Actions…", id: "quickActions", model: model, disabled: targets.isEmpty,
+                 action: { model.showQuickActions() })
+        MenuItem(title: "Show Drop Shelf", id: "dropShelf", model: model, action: { model.toggleShelf?() })
     }
 
     @ViewBuilder private var itemCommands: some View {
@@ -294,7 +307,8 @@ private struct GoMenuCommands: Commands {
         MenuItem(title: "Documents", id: "goDocuments", model: model, action: { model.goTo("Documents") })
         MenuItem(title: "Desktop", id: "goDesktop", model: model, action: { model.goTo("Desktop") })
         MenuItem(title: "Downloads", id: "goDownloads", model: model, action: { model.goTo("Downloads") })
-        MenuItem(title: "Home", id: "goHome", model: model, action: { model.goTo("Home") })
+        MenuItem(title: "Home", id: "goHome", model: model, action: { model.page = .home }) // F16.1
+        Button("Home Folder", action: { model.goTo("Home") })
         MenuItem(title: "Applications", id: "goApplications", model: model, action: { model.goTo("Applications") })
         MenuItem(title: "iCloud Drive", id: "goICloud", model: model, action: { model.goTo("iCloud Drive") })
     }

@@ -78,6 +78,7 @@ private struct BrowserColumn: View {
             .onTapGesture(count: 2) { model.openSelection([entry.id]) }
             // Simultaneous, so selecting doesn't wait out the double-click interval.
             .simultaneousGesture(TapGesture().onEnded { click(entry) })
+            .modifier(QuickActionPress(id: entry.id, pane: pane))
             .contextMenu { FileContextMenu(ids: pane.selection.contains(entry.id) ? pane.selection : [entry.id]) }
             .draggable(entry.url)
             .dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in

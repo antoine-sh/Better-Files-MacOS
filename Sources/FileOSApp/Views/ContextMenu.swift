@@ -3,7 +3,6 @@ import AppKit
 import FileOSCore
 
 /// F3.10: the right-click menu for items, or (with no ids) for the folder's background.
-// shortcut: Peek, Quick Look and Pin to Drop Shelf join this menu with their features (Tasks 7–11)
 struct FileContextMenu: View {
     let ids: Set<String>
     @Environment(AppModel.self) private var model
@@ -39,6 +38,7 @@ struct FileContextMenu: View {
         Group {
             Button("Show in Finder", action: { act { model.showInFinder(urls) } })
             Button("Add to Sidebar", action: { act { model.addToSidebar(urls) } })
+            ShelfItems(urls: urls)
             AddToWorkspaceMenu(urls: urls)
             Button("AirDrop…", action: { act { model.airDrop(urls) } })
                 .disabled(!model.canAirDrop(urls))
@@ -86,6 +86,20 @@ struct FileContextMenu: View {
 
     private func paste(into folder: URL?) {
         Task { await model.paste(into: folder) }
+    }
+}
+
+/// F3.10 / F1.4: Pin to Drop Shelf and Add to Quick Access (folders), Add to Holding (anything).
+private struct ShelfItems: View {
+    let urls: [URL]
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if urls.contains(where: { (u: URL) -> Bool in AppModel.isBrowsableFolder(u) }) {
+            Button("Pin to Drop Shelf", action: { model.pinToShelf(urls) })
+            Button("Add to Quick Access", action: { model.addToQuickAccess(urls) })
+        }
+        Button("Add to Holding", action: { model.addToHolding(urls) })
     }
 }
 
