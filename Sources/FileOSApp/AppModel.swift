@@ -826,7 +826,7 @@ extension AppModel {
                     // The home Trash's errors count; a drive's Trash that can't be read is left out, never blocking.
                     let home = try FileOps.trashSummary(trashes[0])
                     return trashes.dropFirst().reduce(home) { (sum: (count: Int, bytes: Int64), url: URL) in
-                        let s = (try? FileOps.trashSummary(url)) ?? (0, 0)
+                        let s = (try? FileOps.trashSummary(url)) ?? (count: 0, bytes: 0)
                         return (sum.count + s.count, sum.bytes + s.bytes)
                     }
                 }
@@ -860,7 +860,7 @@ extension AppModel {
                     // As in askEmptyTrash: only the home Trash's errors count. A drive's Trash may not exist.
                     let home = try FileOps.emptyTrash(trashes[0])
                     return trashes.dropFirst().reduce(home) { (sum: (count: Int, bytes: Int64), url: URL) in
-                        let d = (try? FileOps.emptyTrash(url)) ?? (0, 0)
+                        let d = (try? FileOps.emptyTrash(url)) ?? (count: 0, bytes: 0)
                         return (sum.count + d.count, sum.bytes + d.bytes)
                     }
                 }
