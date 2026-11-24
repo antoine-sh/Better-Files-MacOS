@@ -793,7 +793,9 @@ extension AppModel {
                 }
             }
             reloadAll()
-            select([renamed])
+            // In the pane showing it, which isn't the active one when the rename committed on a click elsewhere.
+            let shown: PaneModel = paneIndex(showing: url.deletingLastPathComponent()).map { (i: Int) -> PaneModel in panes[i] } ?? pane
+            shown.selection = [renamed.path]
             toast("Renamed “\(oldName)” to “\(renamed.lastPathComponent)”", undoable: true)
         } catch {
             fail(error)
@@ -821,8 +823,10 @@ extension AppModel {
         Task {
             let read: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
                 () -> Result<(count: Int, bytes: Int64), Error> in Result {
-                    try trashes.reduce((count: 0, bytes: Int64(0))) { (sum: (count: Int, bytes: Int64), url: URL) in
-                        let s = try FileOps.trashSummary(url)
+                    // The home Trash's errors count; a drive's Trash that can't be read is left out, never blocking.
+                    let home = try FileOps.trashSummary(trashes[0])
+                    return trashes.dropFirst().reduce(home) { (sum: (count: Int, bytes: Int64), url: URL) in
+                        let s = (try? FileOps.trashSummary(url)) ?? (0, 0)
                         return (sum.count + s.count, sum.bytes + s.bytes)
                     }
                 }
@@ -853,12 +857,12 @@ extension AppModel {
         Task {
             let done: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
                 () -> Result<(count: Int, bytes: Int64), Error> in Result {
-                    // A drive that never had anything trashed has no Trash: nothing to empty there.
-                    try trashes.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
-                        .reduce((count: 0, bytes: Int64(0))) { (sum: (count: Int, bytes: Int64), url: URL) in
-                            let d = try FileOps.emptyTrash(url)
-                            return (sum.count + d.count, sum.bytes + d.bytes)
-                        }
+                    // As in askEmptyTrash: only the home Trash's errors count. A drive's Trash may not exist.
+                    let home = try FileOps.emptyTrash(trashes[0])
+                    return trashes.dropFirst().reduce(home) { (sum: (count: Int, bytes: Int64), url: URL) in
+                        let d = (try? FileOps.emptyTrash(url)) ?? (0, 0)
+                        return (sum.count + d.count, sum.bytes + d.bytes)
+                    }
                 }
             }.value
             switch done {

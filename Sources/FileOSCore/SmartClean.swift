@@ -175,7 +175,8 @@ public enum SmartClean {
             return files.filter { $0.size > 500_000_000 && now.timeIntervalSince($0.modified) > 180 * day }
                 .map { CleanItem(url: $0.url, bytes: $0.size, ticked: false) }
         case .unusedApps:
-            return apps.values.sorted { $0.path < $1.path }.compactMap { bundle in
+            // Built-in apps (on the sealed system volume) can't be trashed: they only count as installed.
+            return apps.values.filter { !$0.path.hasPrefix("/System/") }.sorted { $0.path < $1.path }.compactMap { bundle in
                 let used = (try? bundle.resourceValues(forKeys: [.contentAccessDateKey]))?.contentAccessDate
                 guard let used, now.timeIntervalSince(used) > 180 * day,
                       !isAppRunning(bundle.deletingPathExtension().lastPathComponent) else { return nil }
@@ -210,7 +211,8 @@ public enum SmartClean {
             guard let a = try? FileManager.default.attributesOfItem(atPath: d.path),
                   (a[.modificationDate] as? Date ?? .distantFuture) < since else { return false }
             guard a[.type] as? FileAttributeType == .typeDirectory else { continue }
-            for name in (try? FileManager.default.contentsOfDirectory(atPath: d.path)) ?? [] {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: d.path) else { return false } // unknown counts as touched
+            for name in names {
                 looked += 1
                 if looked > maxEntries { return false }
                 let url = d.appendingPathComponent(name)
@@ -219,6 +221,10 @@ public enum SmartClean {
             }
         }
         return true
+    }
+
+    static func linkCount(_ url: URL) -> Int {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.referenceCount] as? NSNumber)?.intValue ?? 1
     }
 
     /// The same file on disk (a hard link), so trashing one frees nothing.
@@ -253,7 +259,8 @@ public enum SmartClean {
                     return a.url.path < b.url.path
                 }!
                 kept.append(keep.url)
-                for f in set where f.url != keep.url {
+                // A spare with another hard link frees nothing when trashed.
+                for f in set where f.url != keep.url && linkCount(f.url) <= 1 {
                     let note = "Same as “\(keep.url.lastPathComponent)” in \(keep.url.deletingLastPathComponent().lastPathComponent)"
                     out.append(CleanItem(url: f.url, bytes: f.size, ticked: inDownloadsOrDesktop(f) || copyNamed(f), note: note, keep: keep.url))
                 }

@@ -92,10 +92,12 @@ extension AppModel {
     /// usual "Moved 4 items to the Trash" toast for what moved, and the first failure named.
     func moveTickedToTrash() {
         // A duplicate whose kept copy is gone or changed since the scan is no longer a spare.
-        let ticked: [CleanItem] = clean.ticked
-        var failed: [(url: URL, reason: String)] = ticked.filter { (i: CleanItem) -> Bool in !i.stillSafeToTrash }
-            .map { (i: CleanItem) -> (url: URL, reason: String) in (i.url, "the copy it duplicates changed or is gone; scan again") }
-        let urls: [URL] = ticked.filter(\.stillSafeToTrash).map { (i: CleanItem) -> URL in i.url }
+        var urls: [URL] = []
+        var failed: [(url: URL, reason: String)] = []
+        for item in clean.ticked { // checked once each: it reads both files
+            if item.stillSafeToTrash { urls.append(item.url) }
+            else { failed.append((item.url, "the copy it duplicates changed or is gone; scan again")) }
+        }
         var moves: [Move] = []
         for url in urls {
             do { moves += try FileOps.trash([url], trashDir: trashDir) }
