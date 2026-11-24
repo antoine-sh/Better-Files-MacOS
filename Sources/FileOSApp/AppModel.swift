@@ -177,7 +177,7 @@ final class AppModel {
     private(set) var loadingTag = false
     @ObservationIgnored private(set) var tagSearch: Task<Void, Never>?
     /// F16.1 Home stickers, kept element by element.
-    private(set) var stickers: [Sticker]
+    var stickers: [Sticker]
     @ObservationIgnored private var mountObservers: [NSObjectProtocol] = []
     private(set) var collapsedSections: Set<String>
     /// The Mac's sharing name, read from the local configuration store (no network lookup, unlike Host).

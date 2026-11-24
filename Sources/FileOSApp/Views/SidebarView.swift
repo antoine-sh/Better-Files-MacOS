@@ -25,21 +25,7 @@ struct SidebarView: View {
     @State private var filter = ""
 
     var body: some View {
-        List(selection: $selection) {
-            if filter.isEmpty {
-                SidebarRow(title: "Home", symbol: "house.fill", item: .page(.home)) // F16.1
-                WorkspacesSection(open: $workspacesOpen)
-                BookmarksSection(open: $bookmarksOpen)
-                favorites
-                tools
-                locations
-                tags
-            } else {
-                ForEach(Self.matches(model, filter), id: \.item) { (e: SidebarEntry) in
-                    SidebarRow(title: e.title, symbol: e.symbol, item: e.item)
-                }
-            }
-        }
+        List(selection: $selection) { rows }
         .listStyle(.sidebar)
         .searchable(text: $filter, placement: .sidebar, prompt: "Search") // F2.5
         .safeAreaInset(edge: .bottom) { DiskLine() }
@@ -53,6 +39,22 @@ struct SidebarView: View {
         .onChange(of: favoritesOpen) { model.setExpanded("Favorites", favoritesOpen) }
         .onChange(of: toolsOpen) { model.setExpanded("Tools", toolsOpen) }
         .onChange(of: tagsOpen) { model.setExpanded("Tags", tagsOpen) }
+    }
+
+    @ViewBuilder private var rows: some View {
+        if filter.isEmpty {
+            SidebarRow(title: "Home", symbol: "house.fill", item: .page(.home)) // F16.1
+            WorkspacesSection(open: $workspacesOpen)
+            BookmarksSection(open: $bookmarksOpen)
+            favorites
+            tools
+            locations
+            tags
+        } else {
+            ForEach(Self.matches(model, filter), id: \.item) { (e: SidebarEntry) in
+                SidebarRow(title: e.title, symbol: e.symbol, item: e.item)
+            }
+        }
     }
 
     /// F2.1 Tags: the Finder colours, then every tagged file.
