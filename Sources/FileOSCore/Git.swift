@@ -92,7 +92,8 @@ public enum Git {
         var tokens = listing.split(separator: "\0", omittingEmptySubsequences: false)[...]
         if tokens.last == "" { tokens = tokens.dropLast() }
         while let scope = tokens.popFirst() {
-            guard ["system", "global", "local", "worktree", "command"].contains(scope),
+            // "unknown": a file git found outside the repo (e.g. the one built into Xcode's git).
+            guard ["system", "global", "local", "worktree", "command", "unknown"].contains(scope),
                   let entry = tokens.popFirst(), let key = entry.split(separator: "\n", maxSplits: 1).first,
                   !key.isEmpty else { return false }
             let k = key.lowercased()

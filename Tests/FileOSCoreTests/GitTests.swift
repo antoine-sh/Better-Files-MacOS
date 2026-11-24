@@ -186,6 +186,8 @@ final class GitTests: XCTestCase {
             // macOS without developer tools: still a valid answer.
             return XCTAssertEqual(r, .gitMissing)
         }
+        let listing = try await runner.run(git, ["-C", dir.path, "config", "--list", "--show-scope", "-z"], timeout: 10).stdout
+        XCTAssertTrue(s.countsKnown, listing.replacingOccurrences(of: "\0", with: " | "))
         XCTAssertEqual(s.branch, "trunk")
         XCTAssertNil(s.tag)
         XCTAssertEqual([s.changed, s.added, s.deleted], [1, 1, 1])
