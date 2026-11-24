@@ -106,7 +106,8 @@ public enum Shortcuts {
 
     /// The other action already using `combo`, if any.
     public static func conflict(in map: [String: KeyCombo], action: String, combo: KeyCombo) -> String? {
-        map.filter { $0.key != action && $0.value == combo }.keys.sorted().first
+        guard !combo.isNone else { return nil }
+        return map.filter { $0.key != action && $0.value == combo }.keys.sorted().first
     }
 
     /// Defaults with the user's overrides applied; overrides of fixed or unknown actions are ignored.
