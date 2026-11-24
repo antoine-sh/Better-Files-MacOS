@@ -119,7 +119,7 @@ private struct ViewToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             IconButton(symbol: "magnifyingglass", label: "Search", help: "Search everything (⌘K)", disabled: false,
                        action: { model.openSearch() })
-            OpenInMenu(urls: nil)
+            OpenInMenu(urls: nil).environment(model)
             DualPaneMenu(model: model)
             ViewModePicker(pane: pane, model: model)
             SortMenu(pane: pane, model: model)

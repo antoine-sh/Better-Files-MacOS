@@ -253,7 +253,7 @@ struct AgentsView: View {
 
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            StartAgentMenu(agents: agents)
+            StartAgentMenu(agents: agents).environment(model)
             IconButton(symbol: "arrow.clockwise", label: "Refresh", help: "Refresh", disabled: false,
                        action: { Task { await model.loadAgents() } })
         }

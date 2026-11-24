@@ -97,7 +97,7 @@ struct WorkspacePage: View {
                 Label("Add", systemImage: "plus")
             }
             .help("Add folders, files or links. Nothing is copied or moved.")
-            WorkspaceMenu(workspace: w)
+            WorkspaceMenu(workspace: w).environment(model)
         }
     }
 
