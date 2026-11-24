@@ -13,7 +13,7 @@ public enum Greeting {
 
 /// F16.1: the parts Customize shows or hides, stored as `home.widgets` (id → shown; missing means shown).
 public enum HomePart: String, CaseIterable, Codable, Sendable {
-    case worldClock, today, diskSpace, downloadsInbox, photoFrame, pinnedFolder, recentFiles
+    case worldClock, today, diskSpace, downloadsInbox, photoFrame, pinnedFolder, recentFiles, stickers
 
     public var title: String {
         switch self {
@@ -24,6 +24,7 @@ public enum HomePart: String, CaseIterable, Codable, Sendable {
         case .photoFrame: return "Photo Frame"
         case .pinnedFolder: return "Pinned Folder"
         case .recentFiles: return "Recent Files"
+        case .stickers: return "Stickers"
         }
     }
 

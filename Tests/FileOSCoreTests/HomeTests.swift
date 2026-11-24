@@ -17,7 +17,7 @@ final class HomeTests: XCTestCase {
         XCTAssertTrue(HomePart.photoFrame.isShown(in: [:]))
         XCTAssertFalse(HomePart.photoFrame.isShown(in: ["photoFrame": false]))
         XCTAssertEqual(HomePart.allCases.map(\.title), ["World Clock", "Today", "Disk Space", "Downloads Inbox",
-                                                        "Photo Frame", "Pinned Folder", "Recent Files"])
+                                                        "Photo Frame", "Pinned Folder", "Recent Files", "Stickers"])
     }
 
     func testRecentsNewestFirstSkippingHidden() {
