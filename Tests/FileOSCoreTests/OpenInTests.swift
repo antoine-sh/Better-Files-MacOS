@@ -21,9 +21,7 @@ final class OpenInTests: XCTestCase {
         XCTAssertEqual(OpenIn.target(kind: .terminal, selection: [d], cwd: root), d)
     }
 
-    func testArgsAndApps() {
-        let app = OpenIn.apps.first { $0.id == "vscode" }!
-        XCTAssertEqual(OpenIn.openArguments(app: app, url: URL(fileURLWithPath: "/a b")), ["-a", app.bundleName, "/a b"])
+    func testApps() {
         XCTAssertEqual(OpenIn.apps.count, 23)
     }
 }

@@ -47,7 +47,4 @@ public enum OpenIn {
             return selection.first { var d: ObjCBool = false; return FileManager.default.fileExists(atPath: $0.path, isDirectory: &d) && d.boolValue } ?? cwd
         }
     }
-
-    /// Arguments for `/usr/bin/open`.
-    public static func openArguments(app: ExternalApp, url: URL) -> [String] { ["-a", app.bundleName, url.path] }
 }

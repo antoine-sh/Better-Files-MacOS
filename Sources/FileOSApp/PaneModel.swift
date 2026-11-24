@@ -152,8 +152,6 @@ final class PaneModel {
         return out
     }
 
-    var selectedURLs: [URL] { selection.sorted().map { (p: String) -> URL in URL(fileURLWithPath: p) } }
-
     /// Selected items currently on screen (the filter or a collapsed folder can hide some):
     /// what menu commands like Move to Trash act on.
     var visibleSelectedURLs: [URL] {
