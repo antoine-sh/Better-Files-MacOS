@@ -72,13 +72,13 @@ struct ThumbnailView: View {
 private struct GlassFolder: View {
     let entry: Entry
     let side: CGFloat
+    @Environment(AppModel.self) private var model
     @State private var count: Int?
     private var url: URL { entry.url }
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: side * 0.18).fill(.ultraThinMaterial)
-            RoundedRectangle(cornerRadius: side * 0.18).strokeBorder(.white.opacity(0.25))
+            tile
             VStack(spacing: 2) {
                 FolderGlyph(entry: entry, size: side * 0.42)
                 countText
@@ -86,6 +86,19 @@ private struct GlassFolder: View {
         }
         .task(id: url) { loadCount() }
         .accessibilityHidden(true)
+    }
+
+    /// Settings > Appearance > Folder style: glass, flat (a tint of the folder colour), plain and Finder (none).
+    @ViewBuilder private var tile: some View {
+        switch model.settings.folderStyle {
+        case .glass:
+            RoundedRectangle(cornerRadius: side * 0.18).fill(.ultraThinMaterial)
+            RoundedRectangle(cornerRadius: side * 0.18).strokeBorder(.white.opacity(0.25))
+        case .flat:
+            RoundedRectangle(cornerRadius: side * 0.18).fill((model.folderColor(url) ?? model.defaultFolderColor).opacity(0.2))
+        case .plain, .finder:
+            EmptyView()
+        }
     }
 
     @ViewBuilder private var countText: some View {

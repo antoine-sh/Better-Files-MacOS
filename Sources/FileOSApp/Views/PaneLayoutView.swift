@@ -41,13 +41,21 @@ extension AppModel {
     func handlePaneKey(_ event: NSEvent) -> Bool {
         // The Drop Shelf, the menu bar panel and Quick Look keep their own keys.
         guard event.type == .keyDown, !(event.window is NSPanel) else { return false }
+        // The Settings window's keys are its own (shortcut recording, toggles).
+        if event.window?.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true { return false }
         if peek.isShown { return handlePeekKey(event) }
-        guard event.keyCode == 48 || event.keyCode == 49 else { return false } // kVK_Tab, kVK_Space
+        // kVK_Tab, kVK_Space, and kVK_Delete when Settings > General lets ⌫ alone trash.
+        guard event.keyCode == 48 || event.keyCode == 49 || (event.keyCode == 51 && settings.backspaceTrashes) else { return false }
         let mods: NSEvent.ModifierFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock, .numericPad, .function])
         guard mods.isEmpty, page == .browser, !showSearch, !editingPath, !showBatchRename,
               clashPrompt == nil, pane.renaming == nil, !TextEditing.isActive,
               !(event.window?.firstResponder is NSText), event.window?.sheetParent == nil else { return false }
+        if event.keyCode == 51 {
+            guard !targets.isEmpty else { return false }
+            trash(targets)
+            return true
+        }
         if event.keyCode == 49 { // "peek" is fixed to Space (Shortcuts.fixed), so it is matched here
             guard !targets.isEmpty else { return false }
             peekSelection()
@@ -204,6 +212,7 @@ struct PaneView: View {
         case .contents:
             HStack(spacing: 0) {
                 files.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(FolderMotion(url: pane.url, active: isActive))
                 previewPane
             }
         case .locked(let folder):
@@ -283,5 +292,36 @@ struct DualPaneMenu: View {
 
     private func title(_ layout: PaneLayout) -> String {
         model.layout == layout ? "✓ \(layout.title)" : layout.title
+    }
+}
+
+/// F17.4: a new folder fades, glides or zooms in (Reduce Motion: fades), with the folder-open sound.
+/// Animates the same view rather than swapping it, so selection and scrolling keep working.
+struct FolderMotion: ViewModifier {
+    let url: URL
+    let active: Bool
+    @Environment(AppModel.self) private var model
+    @State private var progress: Double = 1
+
+    private var style: AppSettings.Transition {
+        model.settings.motion.transition(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(style == .none ? 1 : 0.3 + 0.7 * progress)
+            .offset(x: style == .slide ? (1 - progress) * 24 : 0)
+            .scaleEffect(style == .zoom ? 0.96 + 0.04 * progress : 1)
+            .onChange(of: url) { arrived() }
+    }
+
+    private func arrived() {
+        if active { Sounds.play(model.settings.sound) }
+        let current: AppSettings.Transition = style
+        guard current != .none else { return }
+        progress = 0
+        Task { @MainActor in
+            withAnimation(.easeOut(duration: current.seconds)) { progress = 1 }
+        }
     }
 }

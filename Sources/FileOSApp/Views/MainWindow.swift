@@ -22,10 +22,13 @@ struct MainWindow: View {
         .modifier(DevDialogs(model: model, agents: model.agents))
         .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
         .modifier(WindowOpener(model: model))
+        .modifier(SettingsEffects(model: model))
     }
 
     private var sidebar: some View {
-        SidebarView().navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
+        SidebarView()
+            .environment(\.sidebarRowSize, model.settings.sidebarRowSize)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 320)
     }
 
     @ViewBuilder private var detail: some View {
@@ -120,6 +123,14 @@ private struct ViewToolbar: ToolbarContent {
             IconButton(symbol: "chart.pie", label: "Insights", help: "Insights (⌥⌘I)", disabled: false,
                        action: { model.toggleInsights() })
             EmptyTrashButton(pane: pane, model: model)
+            if model.settings.toolbarNewFolder {
+                IconButton(symbol: "folder.badge.plus", label: "New Folder", help: "New Folder (⇧⌘N)", disabled: false,
+                           action: { model.newFolder() })
+            }
+            if model.settings.toolbarTrash {
+                IconButton(symbol: "trash", label: "Move to Trash", help: "Move to Trash (⌘⌫)", disabled: model.targets.isEmpty,
+                           action: { model.trash(model.targets) })
+            }
         }
     }
 }

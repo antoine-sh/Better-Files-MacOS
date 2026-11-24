@@ -147,6 +147,16 @@ final class AppModel {
     @ObservationIgnored var shelfModalOpen = false
     @ObservationIgnored var openMainWindow: (@MainActor () -> Void)?
 
+    /// F17: every change is saved and applied at once (see SettingsView.swift).
+    var settings: AppSettings {
+        didSet { if settings != oldValue { settingsChanged(from: oldValue) } }
+    }
+    /// F1.5 / F1.10; never in the self-test unless a check sets them.
+    var showWelcome: Bool
+    var showWhatsNew: Bool
+    /// Set by the app: the Drop Shelf's drag watching follows the settings.
+    @ObservationIgnored var settingsApplied: (@MainActor (AppSettings) -> Void)?
+
     // Sidebar
     private(set) var favorites: [URL]
     private(set) var volumes: [URL] = []
@@ -190,6 +200,11 @@ final class AppModel {
         quickAccess = urls("quickAccess")
         homeParts = store.get("home.widgets", default: [String: Bool]())
         quickActions = QuickAction.ordered(store.getArray("quickActions", of: String.self))
+        let saved: AppSettings = store.get("settings", default: AppSettings())
+        settings = saved
+        showWelcome = !saved.welcomed && !AppMain.isSelfTest
+        showWhatsNew = Release.showsWhatsNew(saved) && !AppMain.isSelfTest
+        let downloads: URL = Self.downloadsFolder(home: home, path: saved.downloadsPath)
         // Element by element, so one damaged entry can't cost the rest. The sample "Acme Project" (F11.5) is
         // seeded only when nothing was ever saved; an empty saved list stays empty.
         let savedWorkspaces: [Workspace]? = store.getArray("workspaces", of: Workspace.self)
@@ -198,7 +213,7 @@ final class AppModel {
         if savedWorkspaces == nil { store.setArray("workspaces", initialWorkspaces) }
         bookmarkState = BookmarkState(bookmarks: store.getArray("bookmarks", of: Bookmark.self) ?? [],
                                       collections: store.getArray("bookmarkCollections", of: BookmarkCollection.self) ?? [])
-        let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: home.appendingPathComponent("Downloads"))
+        let pane = PaneModel(url: home, showHidden: hidden, store: store, downloads: downloads)
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
         refreshVolumes()
@@ -208,6 +223,7 @@ final class AppModel {
             self?.peek.close()
             self?.showMainWindow() // a drop on the Drop Shelf may clash with no window open
         }
+        if saved.startInLastFolder { restoreSession() }
     }
 
     var pane: PaneModel { panes[activePane] }
@@ -397,7 +413,7 @@ extension AppModel {
         }
         if panes.count > new.paneCount { panes.removeLast(panes.count - new.paneCount) }
         while panes.count < new.paneCount {
-            let added = PaneModel(url: from.url, showHidden: showHidden, store: store, downloads: home.appendingPathComponent("Downloads"))
+            let added = PaneModel(url: from.url, showHidden: showHidden, store: store, downloads: downloadsURL)
             added.view = from.view
             panes.append(added)
         }
@@ -786,6 +802,7 @@ extension AppModel {
         case "Applications": url = URL(fileURLWithPath: "/Applications")
         case "iCloud Drive": url = home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
         case "Home": url = home
+        case "Downloads": url = downloadsURL
         default: url = home.appendingPathComponent(place)
         }
         open(url)

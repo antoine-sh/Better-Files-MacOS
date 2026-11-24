@@ -14,7 +14,6 @@ struct TidyState {
 }
 
 extension AppModel {
-    var downloadsURL: URL { FileOps.canonical(home.appendingPathComponent("Downloads")) }
     var tidyTitle: String { pane.url == downloadsURL ? "Tidy Downloads…" : "Tidy Folder…" }
     private var screenshotsFolder: URL { home.appendingPathComponent("Pictures/Screenshots") }
 

@@ -118,12 +118,14 @@ struct FolderGlyph: View {
 
     @ViewBuilder private var glyph: some View {
         let symbol: String = model.folderSymbol(entry)
-        if symbol.isEmpty {
+        // Settings > Appearance "Finder" style: the system folder icon, unless a symbol was chosen for it.
+        let finder: Bool = model.settings.folderStyle == .finder && !model.hasChosenSymbol(entry.url)
+        if symbol.isEmpty || finder {
             FileIcon(url: entry.url, side: size)
         } else {
             Image(systemName: symbol)
                 .font(.system(size: size))
-                .foregroundStyle(model.folderColor(entry.url) ?? Color.accentColor)
+                .foregroundStyle(model.folderColor(entry.url) ?? model.defaultFolderColor)
         }
     }
 }

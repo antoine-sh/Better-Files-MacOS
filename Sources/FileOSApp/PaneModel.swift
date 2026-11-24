@@ -64,7 +64,8 @@ final class PaneModel {
 
     @ObservationIgnored private let store: Store?
     /// The Downloads folder groups by kind and date the Smart Downloads way (F9.1, F9.2).
-    @ObservationIgnored private let downloads: URL?
+    /// Settings > General can change it; the pane reloads then.
+    @ObservationIgnored var downloads: URL?
     private let watcher = DirectoryWatcher()
     @ObservationIgnored private var reloadPending = false
 

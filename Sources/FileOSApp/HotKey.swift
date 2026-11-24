@@ -55,6 +55,11 @@ final class HotKey {
     /// ANSI virtual key codes (kVK_*) for `KeyCombo.key`.
     static func keyCode(_ key: String) -> UInt32? { codes[key] }
 
+    /// The `KeyCombo.key` for a virtual key code, for recording shortcuts in Settings.
+    static func key(forCode code: UInt16) -> String? {
+        codes.first { (pair: (key: String, value: UInt32)) -> Bool in pair.value == UInt32(code) }?.key
+    }
+
     private static let codes: [String: UInt32] = {
         var map: [String: UInt32] = [
             "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,

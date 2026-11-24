@@ -65,8 +65,8 @@ struct HomeView: View {
 
     private func load() async {
         let home: URL = model.home
-        let downloads: URL = home.appendingPathComponent("Downloads")
-        let places: [URL] = ["Desktop", "Documents", "Downloads", "Pictures"].map { (n: String) -> URL in home.appendingPathComponent(n) }
+        let downloads: URL = model.downloadsURL
+        let places: [URL] = ["Desktop", "Documents", "Pictures"].map { (n: String) -> URL in home.appendingPathComponent(n) } + [downloads]
         let found: (recents: [URL], count: Int, latest: [URL]) = await Task.detached { () -> (recents: [URL], count: Int, latest: [URL]) in
             let recents: [URL] = Recents.latest(in: places, limit: 40, includeFolders: false)
             let count: Int = AppModel.itemCount(downloads) ?? 0

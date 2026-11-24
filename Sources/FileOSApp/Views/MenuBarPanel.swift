@@ -101,7 +101,7 @@ struct MenuBarPanel: View {
     }
 
     private func loadDownloads() async {
-        let folder: URL = model.home.appendingPathComponent("Downloads")
+        let folder: URL = model.downloadsURL
         downloads = await Task.detached { () -> [URL] in Recents.latest(in: [folder], limit: 5, includeFolders: true) }.value
     }
 }

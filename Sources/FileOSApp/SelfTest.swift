@@ -153,6 +153,7 @@ enum SelfTest {
         await libraryChecks(model, check)
         await devChecks(model, check)
         await homeChecks(model, check)
+        await settingsChecks(model, check)
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -1106,6 +1107,106 @@ enum SelfTest {
         check("the menu bar panel lays out", menu.fittingSize.height > 50)
         model.unpinFromShelf([inbox])
         model.clearHolding()
+    }
+
+    /// F17, F1.5, F1.7, F1.10 at model level, plus the Settings and welcome views building offscreen.
+    static func settingsChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        let docs: URL = FileOps.canonical(home.appendingPathComponent("Documents"))
+        let stateFile: URL = home.appendingPathComponent("Library/Application Support/FileOS/state.json")
+        func reopened() -> AppModel { AppModel(home: home, trashDir: model.trashDir) }
+
+        check("settings appearance .dark maps to ColorScheme.dark", AppSettings.Appearance.dark.colorScheme == .dark
+                && AppSettings.Appearance.light.colorScheme == .light && AppSettings.Appearance.system.colorScheme == nil)
+        check("no welcome or What's New in the self-test", !model.showWelcome && !model.showWhatsNew)
+        check("sounds are off by default", model.settings.sound == .off && Sounds.name(.off) == nil)
+
+        var applied: AppSettings?
+        model.settingsApplied = { (s: AppSettings) in applied = s }
+        model.settings.motion = .zoom
+        let stored: AppSettings = Store(url: stateFile).get("settings", default: AppSettings())
+        check("a settings change is saved at once", stored.motion == .zoom)
+        check("a settings change is applied at once", applied?.motion == .zoom)
+        check("settings survive a relaunch", reopened().settings.motion == .zoom)
+        model.settingsApplied = nil
+        model.settings.motion = .quiet
+        check("accent colours", AppSettings.color(accent: "mac") == nil && AppSettings.color(accent: "#FF0000") != nil)
+
+        model.settings.downloadsPath = docs.path
+        check("Downloads folder follows Settings", model.downloadsURL == docs)
+        model.settings.downloadsPath = ""
+
+        // ⌫ alone trashes only when allowed (F17.2).
+        let victim: URL = docs.appendingPathComponent("backspace.txt")
+        try? "x".write(to: victim, atomically: true, encoding: .utf8)
+        model.page = .browser
+        model.pane.navigate(to: docs)
+        model.pane.selection = [victim.path]
+        check("⌫ alone does nothing by default", !press(model, 51, "\u{7F}") && fm.fileExists(atPath: victim.path))
+        model.settings.backspaceTrashes = true
+        let trashed: Bool = press(model, 51, "\u{7F}")
+        check("⌫ alone trashes when allowed", trashed && !fm.fileExists(atPath: victim.path))
+        await model.undoLast()
+        check("⌫ trash is undoable", fm.fileExists(atPath: victim.path))
+        model.settings.backspaceTrashes = false
+
+        // Shortcuts (F17.5).
+        let combo: KeyCombo = KeyCombo("Ctrl+Alt+Cmd+L")!
+        model.setShortcut("viewList", combo)
+        let user: [String: KeyCombo] = Store(url: stateFile).get("shortcuts", default: [String: KeyCombo]())
+        check("a recorded shortcut is used and saved", model.shortcuts["viewList"] == combo && user["viewList"] == combo)
+        model.setShortcut("viewList", .none)
+        check("⌫ removes a shortcut", model.shortcuts["viewList"]?.isNone == true)
+        let cmd2: KeyCombo = KeyCombo("Cmd+2")!
+        check("a clash names the other command", Shortcuts.conflict(in: model.shortcuts, action: "viewList", combo: cmd2) == "viewIcons")
+        let used: String? = model.useShortcutHere("viewList", cmd2, from: "viewIcons")
+        check("Use It Here moves the shortcut", used == nil && model.shortcuts["viewList"] == cmd2
+                && model.shortcuts["viewIcons"]?.isNone == true)
+        model.setShortcut("copy", KeyCombo("Cmd+J")!)
+        check("fixed shortcuts can't change", model.shortcuts["copy"] == Shortcuts.defaults["copy"])
+        check("the Drop Shelf shortcut must be global", model.setShortcut("dropShelf", .none) != nil)
+        check("Restore Defaults", model.restoreDefaultShortcuts() == nil && model.shortcuts == Shortcuts.defaults)
+        check("recorded keys map to combos", HotKey.key(forCode: 40) == "k" && HotKey.key(forCode: 96) == "f5")
+
+        // F1.7: panes and view come back.
+        model.pane.navigate(to: docs)
+        model.setLayout(.sideBySide)
+        model.saveSession()
+        let again: AppModel = reopened()
+        check("panes are restored on relaunch", again.layout == .sideBySide && again.panes.first?.url == docs)
+        model.settings.startInLastFolder = false
+        check("start in the last folder can be turned off", reopened().layout == .one)
+        model.settings.startInLastFolder = true
+        model.setLayout(.one)
+
+        // F1.5 / F1.10.
+        model.finishWelcome()
+        check("Start using FileOS ends the welcome", model.settings.welcomed && !model.showWelcome
+                && !Release.showsWhatsNew(model.settings))
+        model.showWhatsNew = true
+        model.closeWhatsNew()
+        check("What's New closes and is remembered", !model.showWhatsNew && model.settings.whatsNewSeen == Release.version)
+
+        check("Settings builds", hosts(AnyView(SettingsView().environment(model)), width: 560, height: 640))
+        check("welcome builds", hosts(AnyView(WelcomeView(steps: WelcomeStep.allCases).environment(model)), width: 540, height: 460))
+        check("What's New builds", hosts(AnyView(WhatsNewView().environment(model)), width: 440, height: 300))
+        check("folder motion is off for none", AppSettings.Motion.none.transition(reduceMotion: false) == .none)
+    }
+
+    /// Lays `view` out offscreen; true when it produced a view tree.
+    private static func hosts(_ view: AnyView, width: CGFloat, height: CGFloat) -> Bool {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+                              styleMask: [.borderless], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: view)
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        let built: Bool = !host.subviews.isEmpty || host.fittingSize.height > 0
+        window.contentView = nil
+        return built
     }
 
     private static func tableCount(_ model: AppModel) -> Int {

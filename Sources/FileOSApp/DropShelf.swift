@@ -586,8 +586,14 @@ final class DropShelfController {
     // MARK: Showing on drag start (F15.1)
 
     /// Watches drags in every app (global monitor; mouse events need no extra permission) and in FileOS.
-    // shortcut: always on; Task 12's Settings > Drop Shelf "show on drag" toggle should gate `watchDrags`
-    func watchDrags() {
+    /// Settings > Drop Shelf "Show on drag" turns this on and off.
+    func watchDrags(_ on: Bool) {
+        guard on else {
+            for monitor in monitors { NSEvent.removeMonitor(monitor) }
+            monitors = []
+            return
+        }
+        guard monitors.isEmpty else { return }
         let mask: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
         if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] (event: NSEvent) in
             self?.mouse(event.type)

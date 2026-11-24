@@ -11,9 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model: AppModel = self.model
+        model.applyAppearance()
         let shelf = DropShelfController(model: model)
-        shelf.watchDrags()
+        shelf.watchDrags(model.settings.dropShelfOnDrag)
         self.shelf = shelf
+        model.settingsApplied = { [weak shelf] (settings: AppSettings) in shelf?.watchDrags(settings.dropShelfOnDrag) }
         model.toggleShelf = { [weak shelf] in shelf?.toggle() }
         hotKey = HotKey(action: { [weak shelf] in shelf?.toggle() })
         if hotKey?.register(model.dropShelfShortcut) == false {
@@ -35,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌘Q also stops the Drop Shelf and its shortcut (F1.6).
     func applicationWillTerminate(_ notification: Notification) {
+        model.saveSession()
         hotKey?.stop()
         shelf?.stop()
     }
@@ -50,7 +53,10 @@ struct FileOSApp: App {
                 .frame(minWidth: 760, minHeight: 460)
         }
         .commands { FileOSCommands(model: delegate.model) }
-        MenuBarExtra {
+        Settings {
+            SettingsView().environment(delegate.model).tint(delegate.model.settings.accentColor)
+        }
+        MenuBarExtra(isInserted: Bindable(delegate.model).settings.menuBar) {
             MenuBarPanel().environment(delegate.model)
         } label: {
             MenuBarLabel(model: delegate.model)
