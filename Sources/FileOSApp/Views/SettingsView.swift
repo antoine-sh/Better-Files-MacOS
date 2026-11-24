@@ -181,8 +181,12 @@ extension AppModel {
         }
         let config = NSWorkspace.OpenConfiguration()
         config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: target, configuration: config) { (_: NSRunningApplication?, _: Error?) in
-            Task { @MainActor in NSApp.terminate(nil) }
+        NSWorkspace.shared.openApplication(at: target, configuration: config) { (_: NSRunningApplication?, error: Error?) in
+            let failed: Bool = error != nil
+            Task { @MainActor in
+                // Quit only once the moved copy is running; otherwise keep this one open.
+                if failed { self.toast("FileOS moved to Applications. Reopen it from there.", undoable: false) } else { NSApp.terminate(nil) }
+            }
         }
         return nil
     }
