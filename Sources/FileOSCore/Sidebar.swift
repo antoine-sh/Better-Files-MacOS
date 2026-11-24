@@ -4,11 +4,10 @@ import Foundation
 public enum CloudLocations {
     public static func list(home: URL) -> [URL] {
         let fm = FileManager.default
-        var isDir: ObjCBool = false
         let icloud = home.appendingPathComponent("Library/Mobile Documents/com~apple~CloudDocs")
         let drives = ((try? fm.contentsOfDirectory(at: home.appendingPathComponent("Library/CloudStorage"),
                                                    includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? [])
-            .filter { fm.fileExists(atPath: $0.path, isDirectory: &isDir) && isDir.boolValue }
+            .filter(PathBar.isDir)
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         return (fm.fileExists(atPath: icloud.path) ? [icloud] : []) + drives
     }

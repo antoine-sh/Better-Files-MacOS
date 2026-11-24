@@ -44,7 +44,7 @@ public enum OpenIn {
         switch kind {
         case .editor: return selection.first ?? cwd
         case .terminal:
-            return selection.first { var d: ObjCBool = false; return FileManager.default.fileExists(atPath: $0.path, isDirectory: &d) && d.boolValue } ?? cwd
+            return selection.first(where: PathBar.isDir) ?? cwd
         }
     }
 }

@@ -221,10 +221,7 @@ public enum Agents {
             paths.append(url.path)
         }
         var seen: Set<String> = []
-        return paths.filter { p in
-            var dir: ObjCBool = false
-            return seen.insert(p).inserted && FileManager.default.fileExists(atPath: p, isDirectory: &dir) && dir.boolValue
-        }.sorted { ($0 as NSString).lastPathComponent.localizedStandardCompare(($1 as NSString).lastPathComponent) == .orderedAscending }
+        return paths.filter { p in seen.insert(p).inserted && PathBar.isDir(URL(fileURLWithPath: p)) }.sorted { ($0 as NSString).lastPathComponent.localizedStandardCompare(($1 as NSString).lastPathComponent) == .orderedAscending }
         .map { URL(fileURLWithPath: $0) }
     }
 
