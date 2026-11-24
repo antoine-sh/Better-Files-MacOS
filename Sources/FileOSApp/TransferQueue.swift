@@ -44,6 +44,14 @@ final class TransferQueue {
         return result
     }
 
+    /// Returns once no job is running or waiting.
+    func idle() async {
+        while let last = tail {
+            await last.value
+            if tail == last { return }
+        }
+    }
+
     private func start(_ job: Job) async -> Result<TransferResult, Error>? {
         guard let index = waiting.firstIndex(where: { (j: Job) -> Bool in j.id == job.id }) else { return nil }
         waiting.remove(at: index)

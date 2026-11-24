@@ -23,20 +23,38 @@ struct PreviewInfo: View {
     let url: URL
     let pane: PaneModel
     @Environment(AppModel.self) private var model
+    @State private var entry: Entry?
+    /// The key the current `entry` was read for; until it matches, the item is still being read.
+    @State private var readFor: String?
 
-    private var entry: Entry? {
-        let parent: URL = url.deletingLastPathComponent()
-        let name: String = url.lastPathComponent
-        // shortcut: lists the parent to describe one item; fine for a preview of one selection
-        return (try? FileOps.listDirectory(parent, showHidden: true))?.first { (e: Entry) -> Bool in e.name == name }
-    }
+    /// Read again when the item or its folder's listing changes.
+    private var key: String { "\(url.path)|\(pane.generation)" }
 
     var body: some View {
-        if let entry {
-            ScrollView { details(entry).padding(16) }
-        } else {
-            Text("Nothing to preview").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if let entry {
+                ScrollView { details(entry).padding(16) }
+            } else if readFor == key {
+                Text("Nothing to preview").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Color.clear
+            }
         }
+        .task(id: key) { await read() }
+    }
+
+    private func read() async {
+        let target: URL = url, wanted: String = key
+        let found: Entry? = await Task.detached(priority: .userInitiated) { () -> Entry? in Self.describe(target) }.value
+        guard !Task.isCancelled else { return }
+        entry = found
+        readFor = wanted
+    }
+
+    // shortcut: lists the parent to describe one item; fine for a preview of one selection
+    nonisolated static func describe(_ url: URL) -> Entry? {
+        let name: String = url.lastPathComponent
+        return (try? FileOps.listDirectory(url.deletingLastPathComponent(), showHidden: true))?.first { (e: Entry) -> Bool in e.name == name }
     }
 
     private func details(_ entry: Entry) -> some View {
@@ -49,7 +67,7 @@ struct PreviewInfo: View {
                 Button("Open", action: { model.openSelection([entry.id]) })
                 Button("Show in Finder", action: { model.showInFinder([entry.url]) })
             }
-            if entry.isDirectory { FolderTree(url: entry.url) }
+            if entry.isDirectory { FolderTree(url: entry.url, refresh: pane.generation) }
         }
     }
 
@@ -92,27 +110,31 @@ private struct InfoGrid: View {
     static func date(_ d: Date) -> String { d.formatted(date: .abbreviated, time: .shortened) }
 }
 
-/// A folder's contents two levels deep, capped so huge folders stay quick.
+private struct TreeLine: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let depth: Int
+    let isDirectory: Bool
+}
+
+/// A folder's contents two levels deep, capped so huge folders stay quick; read off the main actor.
 private struct FolderTree: View {
     let url: URL
-    static let cap = 40
+    /// The pane's listing generation: a change in the open folder reads the tree again.
+    let refresh: Int
+    nonisolated static let cap = 40
 
-    private struct Line: Identifiable {
-        let id: String
-        let name: String
-        let depth: Int
-        let isDirectory: Bool
-    }
+    @State private var lines: [TreeLine] = []
 
-    private var lines: [Line] {
-        var out: [Line] = []
+    nonisolated static func read(_ url: URL) -> [TreeLine] {
+        var out: [TreeLine] = []
         let top: [Entry] = Arrange.sorted((try? FileOps.listDirectory(url)) ?? [], FolderPrefs())
-        for entry in top.prefix(Self.cap) {
-            out.append(Line(id: entry.id, name: entry.name, depth: 0, isDirectory: entry.isDirectory))
+        for entry in top.prefix(cap) {
+            out.append(TreeLine(id: entry.id, name: entry.name, depth: 0, isDirectory: entry.isDirectory))
             guard entry.isDirectory, !entry.isSymlink else { continue }
             let inner: [Entry] = Arrange.sorted((try? FileOps.listDirectory(entry.url)) ?? [], FolderPrefs())
-            for child in inner.prefix(Self.cap) {
-                out.append(Line(id: child.id, name: child.name, depth: 1, isDirectory: child.isDirectory))
+            for child in inner.prefix(cap) {
+                out.append(TreeLine(id: child.id, name: child.name, depth: 1, isDirectory: child.isDirectory))
             }
         }
         return out
@@ -121,12 +143,17 @@ private struct FolderTree: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Contents").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(lines) { (line: Line) in
+            ForEach(lines) { (line: TreeLine) in
                 Label(line.name, systemImage: line.isDirectory ? "folder" : "doc")
                     .font(.caption)
                     .lineLimit(1)
                     .padding(.leading, CGFloat(line.depth) * 14)
             }
+        }
+        .task(id: "\(url.path)|\(refresh)") {
+            let folder: URL = url
+            let found: [TreeLine] = await Task.detached(priority: .utility) { () -> [TreeLine] in Self.read(folder) }.value
+            if !Task.isCancelled { lines = found }
         }
     }
 }

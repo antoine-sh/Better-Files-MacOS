@@ -11,9 +11,9 @@ final class CleanModel {
     private(set) var needsScan = true
     /// Scans started, for the self-test.
     private(set) var scansStarted = 0
-    private(set) var summary: (free: Int64, total: Int64, used: Int64, trash: Int64)?
+    private(set) var summary: (free: Int64, total: Int64, used: Int64, trash: Int64?)?
     var openCard: CardID?
-    @ObservationIgnored private var scanTask: Task<(summary: (free: Int64, total: Int64, used: Int64, trash: Int64), cards: [CleanCard]), Never>?
+    @ObservationIgnored private var scanTask: Task<(summary: (free: Int64, total: Int64, used: Int64, trash: Int64?), cards: [CleanCard]), Never>?
 
     static var emptyCards: [CleanCard] { CardID.allCases.map { (id: CardID) -> CleanCard in CleanCard(id: id, items: []) } }
 
@@ -24,7 +24,7 @@ final class CleanModel {
         looking = true
         cards = Self.emptyCards
         let running: Set<String> = Set(NSWorkspace.shared.runningApplications.compactMap { (a: NSRunningApplication) -> String? in a.localizedName })
-        let task = Task.detached(priority: .utility) { () -> (summary: (free: Int64, total: Int64, used: Int64, trash: Int64), cards: [CleanCard]) in
+        let task = Task.detached(priority: .utility) { () -> (summary: (free: Int64, total: Int64, used: Int64, trash: Int64?), cards: [CleanCard]) in
             let summary = SmartClean.diskSummary(home: home)
             let cards: [CleanCard] = SmartClean.scan(home: home, now: Date(), isAppRunning: { (name: String) -> Bool in running.contains(name) },
                                                      applications: applications)
@@ -88,14 +88,35 @@ final class CleanModel {
 }
 
 extension AppModel {
-    /// "Move 4 to Trash": one undo entry and the usual "Moved 4 items to the Trash" toast.
+    /// "Move 4 to Trash": item by item, so one that can't move doesn't keep the rest; one undo entry and the
+    /// usual "Moved 4 items to the Trash" toast for what moved, and the first failure named.
     func moveTickedToTrash() {
         let urls: [URL] = clean.ticked.map { (i: CleanItem) -> URL in i.url }
-        trash(urls)
+        var moves: [Move] = []
+        var failed: [(url: URL, reason: String)] = []
+        for url in urls {
+            do { moves += try FileOps.trash([url], trashDir: trashDir) }
+            catch { failed.append((url, error.localizedDescription)) }
+        }
+        if !moves.isEmpty {
+            let done: [Move] = moves
+            undo.push("Move to Trash") { FileOps.restore(done) }
+            toast("Moved \(Self.items(moves.count)) to the Trash", undoable: true)
+        }
+        if let first = failed.first {
+            let more: String = failed.count > 1 ? " and \(Self.items(failed.count - 1)) more" : ""
+            toast("Couldn't move “\(first.url.lastPathComponent)”\(more) to the Trash: \(first.reason)", undoable: false)
+        }
+        reloadAll()
         clean.dropGone()
     }
 
-    static func diskSummaryText(_ s: (free: Int64, total: Int64, used: Int64, trash: Int64), volume: String) -> String {
+    /// Never "Zero KB" for a Trash macOS won't let us read.
+    static func trashLine(_ bytes: Int64?) -> String {
+        bytes.map { (b: Int64) -> String in "In the Trash: \(formatBytes(b))" } ?? "In the Trash: unknown (needs Full Disk Access)"
+    }
+
+    static func diskSummaryText(_ s: (free: Int64, total: Int64, used: Int64, trash: Int64?), volume: String) -> String {
         "\(formatBytes(s.free)) free of \(formatBytes(s.total)) on \(volume) · \(formatBytes(s.used)) used"
     }
 }
@@ -150,7 +171,7 @@ private struct DiskSummaryHeader: View {
             if let s = clean.summary {
                 Text(AppModel.diskSummaryText(s, volume: volume)).font(.title3.weight(.semibold))
                 ProgressView(value: Double(s.used), total: Double(max(1, s.total)))
-                Text("In the Trash: \(formatBytes(s.trash))").font(.caption).foregroundStyle(.secondary)
+                Text(AppModel.trashLine(s.trash)).font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("Looking…").font(.title3.weight(.semibold)).foregroundStyle(.secondary)
             }

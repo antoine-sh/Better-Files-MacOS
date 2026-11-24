@@ -34,12 +34,27 @@ struct RowSection: Identifiable {
     var id: String { title }
 }
 
+/// What one reload read, off the main actor.
+private struct Listing: Sendable {
+    var entries: Result<[Entry], FileOSError>
+    /// Expanded folder → its children, nil when it can no longer be listed.
+    var children: [String: [Entry]?]
+    var columns: [URL: [Entry]?]
+    /// Selected paths that no longer exist.
+    var gone: Set<String>
+    var free: Int64
+}
+
 @MainActor @Observable
 final class PaneModel {
     private(set) var url: URL
     private(set) var entries: [Entry] = []
-    /// Bumped on every listing, so the git chip can look again without diffing entries.
+    /// Bumped on every listing, so the git chip can look again without diffing entries; a listing that
+    /// lands after a newer one started is stale and dropped.
     private(set) var generation = 0
+    /// A listing is on its way (off the main actor); the empty-folder note waits for it.
+    private(set) var loading = false
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
     var selection: Set<Entry.ID> = []
     var view: ViewMode = .list
     private(set) var prefs = FolderPrefs()
@@ -48,8 +63,9 @@ final class PaneModel {
     var filter = ""
     private(set) var expanded: Set<String> = []
     private(set) var children: [String: [Entry]] = [:]
-    /// Column view: folders opened to the right of `url`, outermost first.
+    /// Column view: folders opened to the right of `url`, outermost first, and their listings.
     private(set) var trail: [URL] = []
+    private(set) var columnLists: [URL: [Entry]] = [:]
     /// The item showing an inline rename field, and whether the preview pane hosts the field rather
     /// than the item's row: exactly one field may exist, or the one that loses focus commits early.
     var renaming: String?
@@ -193,39 +209,78 @@ final class PaneModel {
         navigate(to: url.deletingLastPathComponent(), select: url)
     }
 
+    /// Lists the folder, its expanded subfolders and open columns off the main actor, so a huge or slow
+    /// folder never stalls the window.
     func reload() {
         generation += 1
-        do {
-            entries = try FileOps.listDirectory(url, showHidden: showHidden)
+        let gen: Int = generation, dir: URL = url, hidden: Bool = showHidden
+        let open: Set<String> = expanded, columns: [URL] = trail, selected: Set<String> = selection
+        loading = true
+        loadTask = Task { [weak self] in
+            let listing: Listing = await Task.detached(priority: .userInitiated) { () -> Listing in
+                PaneModel.list(dir, hidden: hidden, expanded: open, columns: columns, selected: selected)
+            }.value
+            guard let self, self.generation == gen else { return } // a newer listing is on its way
+            self.apply(listing)
+        }
+    }
+
+    /// Waits until the newest listing has landed (the self-test acts on fresh entries).
+    func loaded() async {
+        while let task = loadTask {
+            await task.value
+            if loadTask == task { loadTask = nil }
+        }
+    }
+
+    nonisolated private static func list(_ dir: URL, hidden: Bool, expanded: Set<String>, columns: [URL],
+                                         selected: Set<String>) -> Listing {
+        let entries: Result<[Entry], FileOSError>
+        do { entries = .success(try FileOps.listDirectory(dir, showHidden: hidden)) } catch {
+            // Non-FileOSError failures (e.g. not a directory) read as "can't be found" rather than a blank pane.
+            entries = .failure((error as? FileOSError) ?? .notFound(dir.path))
+        }
+        var children: [String: [Entry]?] = [:]
+        for id in expanded { children[id] = .some(try? FileOps.listDirectory(URL(fileURLWithPath: id), showHidden: hidden)) }
+        var lists: [URL: [Entry]?] = [:]
+        for column in columns { lists[column] = .some(try? FileOps.listDirectory(column, showHidden: hidden)) }
+        // Selection can include expanded children and column items, so keep whatever still exists.
+        let gone: Set<String> = selected.filter { (p: String) -> Bool in (try? FileManager.default.attributesOfItem(atPath: p)) == nil }
+        return Listing(entries: entries, children: children, columns: lists, gone: gone, free: FileOps.diskInfo(for: dir).free)
+    }
+
+    private func apply(_ listing: Listing) {
+        loading = false
+        switch listing.entries {
+        case .success(let list):
+            entries = list
             error = nil
             watcher.watch(url) { [weak self] in self?.scheduleReload() }
-        } catch {
+        case .failure(let failure):
             watcher.stop() // a deleted folder's old vnode would never fire again
             entries = []
-            // Non-FileOSError failures (e.g. not a directory) read as "can't be found" rather than a blank pane.
-            self.error = (error as? FileOSError) ?? .notFound(url.path)
+            error = failure
         }
-        // shortcut: only the open folder is watched; expanded subfolders refresh with it
-        for id in expanded {
-            if let kids = try? FileOps.listDirectory(URL(fileURLWithPath: id), showHidden: showHidden) {
-                children[id] = kids
-            } else {
-                expanded.remove(id)
-                children[id] = nil
-            }
+        // shortcut: only the open folder is watched; expanded subfolders and columns refresh with it
+        for (id, kids) in listing.children where expanded.contains(id) {
+            if let kids { children[id] = kids } else { expanded.remove(id); children[id] = nil }
         }
-        trail = trail.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
-        // Selection can include expanded children and column items, so keep whatever still exists.
-        selection = selection.filter { (p: String) -> Bool in (try? FileManager.default.attributesOfItem(atPath: p)) != nil }
-        freeSpace = FileOps.diskInfo(for: url).free
+        for (dir, list) in listing.columns {
+            if let list { columnLists[dir] = list } else { columnLists[dir] = nil; trail.removeAll { (u: URL) -> Bool in u == dir } }
+        }
+        selection.subtract(listing.gone)
+        freeSpace = listing.free
     }
 
     private func show(_ target: URL, select: URL?) {
         url = target
+        entries = [] // never the old folder's items under the new path while it lists
+        error = nil
         filter = ""
         expanded = []
         children = [:]
         trail = []
+        columnLists = [:]
         renaming = nil
         renamingInPreview = false
         selection = select.map { (u: URL) -> Set<String> in [FileOps.canonical(u).path] } ?? []
@@ -300,8 +355,15 @@ final class PaneModel {
     func setExpanded(_ entry: Entry, _ open: Bool) {
         guard entry.isDirectory else { return }
         if open {
-            children[entry.id] = (try? FileOps.listDirectory(entry.url, showHidden: showHidden)) ?? []
             expanded.insert(entry.id)
+            let id: String = entry.id, dir: URL = entry.url, hidden: Bool = showHidden
+            Task { [weak self] in
+                let kids: [Entry] = await Task.detached(priority: .userInitiated) { () -> [Entry] in
+                    (try? FileOps.listDirectory(dir, showHidden: hidden)) ?? []
+                }.value
+                guard let self, self.expanded.contains(id) else { return } // closed again meanwhile
+                self.children[id] = kids
+            }
         } else {
             expanded.remove(entry.id)
             children[entry.id] = nil
@@ -357,9 +419,20 @@ final class PaneModel {
     func columnEntries(_ index: Int) -> [Entry] {
         if index == 0 { return visibleEntries }
         guard index < columnDirs.count else { return [] }
-        // shortcut: deeper columns are listed per render; cache if columns of huge folders get slow
-        let list: [Entry] = (try? FileOps.listDirectory(columnDirs[index], showHidden: showHidden)) ?? []
-        return Arrange.sorted(list, prefs)
+        return Arrange.sorted(columnLists[columnDirs[index]] ?? [], prefs)
+    }
+
+    /// Opens `dir` as the next column and lists it off the main actor.
+    private func openColumn(_ dir: URL) {
+        trail.append(dir)
+        let hidden: Bool = showHidden
+        Task { [weak self] in
+            let list: [Entry] = await Task.detached(priority: .userInitiated) { () -> [Entry] in
+                (try? FileOps.listDirectory(dir, showHidden: hidden)) ?? []
+            }.value
+            guard let self, self.trail.contains(dir) else { return } // closed again meanwhile
+            self.columnLists[dir] = list
+        }
     }
 
     /// Clicking in column `index`: a folder opens the next column, a file closes deeper ones.
@@ -367,7 +440,7 @@ final class PaneModel {
         let order: [String] = columnEntries(index).map { (e: Entry) -> String in e.id }
         click(entry.id, in: order, command: command, shift: shift)
         trail = Array(trail.prefix(index))
-        if selection.count == 1, entry.isDirectory { trail.append(FileOps.canonical(entry.url)) }
+        if selection.count == 1, entry.isDirectory { openColumn(FileOps.canonical(entry.url)) }
     }
 
     /// The column holding the current selection (the cursor's column).
@@ -384,7 +457,7 @@ final class PaneModel {
         trail = Array(trail.prefix(index))
         if selection.count == 1, let id = selection.first, let entry = list.first(where: { (e: Entry) -> Bool in e.id == id }),
            entry.isDirectory {
-            trail.append(FileOps.canonical(entry.url))
+            openColumn(FileOps.canonical(entry.url))
         }
     }
 

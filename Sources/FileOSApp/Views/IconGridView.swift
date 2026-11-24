@@ -103,7 +103,7 @@ struct IconGridView: View {
     }
 
     @ViewBuilder private var emptyNote: some View {
-        if pane.visibleEntries.isEmpty {
+        if pane.visibleEntries.isEmpty && !pane.loading {
             Text(FileListView.emptyText(filter: pane.filter)).foregroundStyle(.secondary)
         }
     }

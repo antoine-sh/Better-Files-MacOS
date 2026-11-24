@@ -35,7 +35,8 @@ private struct ToastRow: View {
     }
 
     @ViewBuilder private var undoButton: some View {
-        if toast.undoable { Button("Undo", action: { undo() }) }
+        // Undo always undoes the newest action, so only the newest undoable toast offers it.
+        if toast.undoable && toast.id == model.undoToastID { Button("Undo", action: { undo() }) }
     }
 
     private func dismiss() { model.dismiss(toast) }

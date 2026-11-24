@@ -40,9 +40,12 @@ struct SidebarView: View {
 
     private var favorites: some View {
         Section("Favorites", isExpanded: $favoritesOpen) {
-            ForEach(favoriteURLs, id: \.self) { (url: URL) in
-                SidebarRow(title: url.lastPathComponent, symbol: Self.symbol(for: url.lastPathComponent),
-                           item: .folder(url))
+            ForEach(model.standardFavorites, id: \.self) { (url: URL) in
+                FolderRow(title: url.lastPathComponent, symbol: Self.symbol(for: url.lastPathComponent), url: url)
+            }
+            ForEach(model.favorites, id: \.self) { (url: URL) in
+                FolderRow(title: url.lastPathComponent, symbol: "folder", url: url)
+                    .contextMenu { Button("Remove from Sidebar", action: { model.removeFromSidebar(url) }) }
             }
         }
     }
@@ -57,22 +60,14 @@ struct SidebarView: View {
 
     private var locations: some View {
         Section("Locations", isExpanded: $locationsOpen) {
-            SidebarRow(title: model.home.lastPathComponent, symbol: "house", item: .folder(model.home))
-            SidebarRow(title: model.displayName(Self.root), symbol: "internaldrive", item: .folder(Self.root))
-            ForEach(model.volumes, id: \.self) { (url: URL) in
-                SidebarRow(title: model.displayName(url), symbol: "externaldrive", item: .folder(url))
-            }
-            SidebarRow(title: "Trash", symbol: "trash", item: .folder(model.trashURL))
+            FolderRow(title: model.home.lastPathComponent, symbol: "house", url: model.home)
+            FolderRow(title: model.displayName(Self.root), symbol: "internaldrive", url: Self.root)
+            ForEach(model.volumes, id: \.self) { (url: URL) in VolumeRow(url: url) }
+            SidebarRow(title: "Trash", symbol: "trash", item: .folder(model.trashURL)) // F2.3: takes no drops
         }
     }
 
     private static let root = FileOps.canonical(URL(fileURLWithPath: "/"))
-
-    private var favoriteURLs: [URL] {
-        var urls: [URL] = model.standardFavorites
-        urls.append(contentsOf: model.favorites)
-        return urls
-    }
 
     private func currentItem() -> SidebarItem {
         if model.page == .browser { return .folder(model.pane.url) }
@@ -214,6 +209,57 @@ private struct SidebarRow: View {
     var body: some View {
         Label(title, systemImage: symbol).tag(item)
     }
+}
+
+/// A favourite or location: opens the folder; drops move there (same disk) or copy (other disk, ⌥), F2.3.
+private struct FolderRow: View {
+    let title: String
+    let symbol: String
+    let url: URL
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Label(title, systemImage: symbol)
+            .tag(SidebarItem.folder(url))
+            .modifier(FolderDrop(url: url))
+    }
+}
+
+private struct FolderDrop: ViewModifier {
+    let url: URL
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        content.dropDestination(for: URL.self) { (urls: [URL], _: CGPoint) -> Bool in
+            let files: [URL] = urls.filter { (u: URL) -> Bool in u.isFileURL }
+            guard !files.isEmpty else { return false }
+            let folder: URL = url
+            Task { await model.drop(files, into: folder) }
+            return true
+        }
+    }
+}
+
+/// A connected drive with its ⏏ button and Eject in the right-click menu (F2.6).
+private struct VolumeRow: View {
+    let url: URL
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack {
+            Label(model.displayName(url), systemImage: "externaldrive")
+            Spacer()
+            Button(action: { eject() }) { Image(systemName: "eject") }
+                .buttonStyle(.borderless)
+                .help("Eject")
+                .accessibilityLabel("Eject \(model.displayName(url))")
+        }
+        .tag(SidebarItem.folder(url))
+        .modifier(FolderDrop(url: url))
+        .contextMenu { Button("Eject", action: { eject() }) }
+    }
+
+    private func eject() { model.eject(url) }
 }
 
 /// F2.4: Mac name, disk bar (orange at 90% full or more), free space. Click opens About This Mac.

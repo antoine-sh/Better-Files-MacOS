@@ -68,6 +68,11 @@ final class AppModel {
     var showExtensionAlert = false
     var showEmptyTrashAlert = false
     private(set) var emptyTrashSummary: (count: Int, bytes: Int64) = (0, 0)
+    /// The Trash couldn't be listed or emptied: macOS wants Full Disk Access for it.
+    var showTrashAccessAlert = false
+    /// A rename to a name starting with "." waits for "Use “.”" (it hides the item).
+    var dotPrompt: (url: URL, newName: String)?
+    var showDotAlert = false
     var showBatchRename = false
     private(set) var batchRenameTargets: [URL] = []
     /// ⌥⌘T (F9.4).
@@ -160,6 +165,7 @@ final class AppModel {
     // Sidebar
     private(set) var favorites: [URL]
     private(set) var volumes: [URL] = []
+    @ObservationIgnored private var mountObservers: [NSObjectProtocol] = []
     private(set) var collapsedSections: Set<String>
     /// The Mac's sharing name, read from the local configuration store (no network lookup, unlike Host).
     var macName: String { (SCDynamicStoreCopyComputerName(nil, nil) as String?) ?? "Mac" }
@@ -217,6 +223,12 @@ final class AppModel {
         pane.view = store.get("view.mode", default: ViewMode.list)
         panes = [pane]
         refreshVolumes()
+        let center: NotificationCenter = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+            mountObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.volumesChanged() }
+            })
+        }
         // A clash question must be answerable: close ⌘K so the sheet can show.
         transfers.willAsk = { [weak self] in
             self?.showSearch = false
@@ -333,10 +345,60 @@ final class AppModel {
     // MARK: Sidebar
 
     func refreshVolumes() {
-        // shortcut: read at launch and on demand; listen to NSWorkspace mount notifications with eject (F2.6)
         let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: [.volumeNameKey],
                                                          options: [.skipHiddenVolumes]) ?? []
         volumes = urls.filter { $0.path != "/" }.map(FileOps.canonical)
+    }
+
+    /// A drive came or went (Finder, another app, or our Eject): panes showing a gone drive go home.
+    func volumesChanged() {
+        refreshVolumes()
+        for p in panes where !FileManager.default.fileExists(atPath: p.url.path) { p.navigate(to: home) }
+    }
+
+    /// `url` is the drive or inside it.
+    nonisolated static func isOn(_ url: URL, volume: URL) -> Bool {
+        let path: String = FileOps.canonical(url).path, root: String = FileOps.canonical(volume).path
+        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    /// A copy or move (running or waiting) reads from or writes to the drive.
+    func isBusy(_ volume: URL) -> Bool {
+        let jobs: [TransferQueue.Job] = (transfers.running.map { (j: TransferQueue.Job) -> [TransferQueue.Job] in [j] } ?? []) + transfers.waiting
+        return jobs.contains { (job: TransferQueue.Job) -> Bool in
+            ([job.dest] + job.sources).contains { (u: URL) -> Bool in Self.isOn(u, volume: volume) }
+        }
+    }
+
+    /// ⌘E: the selected drive, else the drive the open folder is on (never the startup disk).
+    var ejectTarget: URL? {
+        let candidates: [URL] = targets + [pane.url]
+        for url in candidates {
+            if let volume = volumes.first(where: { (v: URL) -> Bool in Self.isOn(url, volume: v) }) { return volume }
+        }
+        return nil
+    }
+
+    /// F2.6: ⏏, right-click or ⌘E. Refused while a transfer uses the drive; failures show as a toast.
+    func eject(_ volume: URL) {
+        let name: String = displayName(volume)
+        if isBusy(volume) {
+            toast("“\(name)” can't be ejected while items are being copied", undoable: false)
+            return
+        }
+        // Off the main actor: unmounting waits for the drive (FileManager's form of NSWorkspace's unmountAndEjectDevice).
+        Task.detached { [weak self] in
+            var reason: String?
+            do { try await FileManager.default.unmountVolume(at: volume, options: [.allPartitionsAndEjectDisk]) }
+            catch { reason = error.localizedDescription }
+            let failure: String? = reason
+            await self?.ejected(name, failure: failure)
+        }
+    }
+
+    private func ejected(_ name: String, failure: String?) {
+        if let failure { toast("Couldn't eject “\(name)”: \(failure)", undoable: false) }
+        volumesChanged()
     }
 
     func isExpanded(_ section: String) -> Bool { !collapsedSections.contains(section) }
@@ -375,13 +437,22 @@ final class AppModel {
         Task { await undoLast() }
     }
 
+    /// Waits for the running copy or move first (its own undo isn't pushed until it ends); the stack then
+    /// runs undos one at a time, however fast ⌘Z is pressed.
     func undoLast() async {
+        await transfers.idle()
         guard let result = await undo.undo()?.result else { return }
         reloadAll()
         if !result.failed.isEmpty { toast(Self.restoreFailureText(result), undoable: false) }
     }
 
     func reloadAll() { for p in panes { p.reload() } }
+
+    /// Waits until every pane's newest listing has landed.
+    func settled() async { for p in panes { await p.loaded() } }
+
+    /// Only the newest undoable toast offers Undo: ⌘Z (and so Undo) always undoes the newest action.
+    var undoToastID: UUID? { toasts.last { (t: Toast) -> Bool in t.undoable }?.id }
 
     static func items(_ n: Int) -> String { n == 1 ? "1 item" : "\(n) items" }
 }
@@ -634,6 +705,23 @@ extension AppModel {
             toast(problem, undoable: false)
             return
         }
+        if Rename.hidesItem(newName), !Rename.hidesItem(old) {
+            dotPrompt = (url, newName)
+            showDotAlert = true
+            return
+        }
+        continueRename(url, to: newName)
+    }
+
+    /// "Use “.”": the dot name is wanted.
+    func confirmDotName() {
+        guard let prompt = dotPrompt else { return }
+        dotPrompt = nil
+        continueRename(prompt.url, to: prompt.newName)
+    }
+
+    private func continueRename(_ url: URL, to newName: String) {
+        let old: String = url.lastPathComponent
         // shortcut: only asks when both names have an extension; adding or removing one renames directly
         if let change = Rename.extensionChange(from: old, to: newName), !change.from.isEmpty, !change.to.isEmpty {
             extensionPrompt = ExtensionPrompt(url: url, newName: newName, from: change.from, to: change.to)
@@ -688,14 +776,28 @@ extension AppModel {
 
     // MARK: Trash (F5.10)
 
+    /// Reads the Trash off the main actor (it can be huge). A Trash macOS won't let us list is reported
+    /// as needing Full Disk Access, never as empty.
     func askEmptyTrash() {
-        let summary: (count: Int, bytes: Int64) = FileOps.trashSummary(trashURL)
-        guard summary.count > 0 else {
-            toast("The Trash is empty", undoable: false)
-            return
+        let trash: URL = trashURL
+        Task {
+            let read: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
+                () -> Result<(count: Int, bytes: Int64), Error> in Result { try FileOps.trashSummary(trash) }
+            }.value
+            switch read {
+            case .success(let summary) where summary.count == 0:
+                toast("The Trash is empty", undoable: false)
+            case .success(let summary):
+                emptyTrashSummary = summary
+                showEmptyTrashAlert = true
+            case .failure(let error):
+                trashFailed(error)
+            }
         }
-        emptyTrashSummary = summary
-        showEmptyTrashAlert = true
+    }
+
+    private func trashFailed(_ error: Error) {
+        if case FileOSError.accessDenied = error { showTrashAccessAlert = true } else { fail(error) }
     }
 
     static func emptyTrashMessage(count: Int, bytes: Int64) -> String {
@@ -704,13 +806,17 @@ extension AppModel {
 
     /// Only ever called from the "Empty the Trash?" alert: the one permanent delete.
     func emptyTrash() {
-        do {
-            let done: (count: Int, bytes: Int64) = try FileOps.emptyTrash(trashURL)
-            toast("Deleted \(Self.items(done.count)) for good", undoable: false)
-        } catch {
-            fail(error)
+        let trash: URL = trashURL
+        Task {
+            let done: Result<(count: Int, bytes: Int64), Error> = await Task.detached(priority: .userInitiated) {
+                () -> Result<(count: Int, bytes: Int64), Error> in Result { try FileOps.emptyTrash(trash) }
+            }.value
+            switch done {
+            case .success(let d): toast("Deleted \(Self.items(d.count)) for good", undoable: false)
+            case .failure(let error): trashFailed(error)
+            }
+            reloadAll()
         }
-        reloadAll()
     }
 
     // MARK: Misc (F5.13, F4)
@@ -745,6 +851,23 @@ extension AppModel {
 
     func removeFavorites(_ urls: [URL]) {
         favorites.removeAll { (u: URL) -> Bool in urls.contains(u) }
+        store.set("favorites", favorites.map { (u: URL) -> String in u.path })
+    }
+
+    /// F2.2: only the shortcut goes; the folder is untouched. Undo puts it back where it was.
+    func removeFromSidebar(_ url: URL) {
+        guard let index = favorites.firstIndex(of: url) else { return }
+        removeFavorites([url])
+        undo.push("Remove from Sidebar") {
+            await self.restoreFavorite(url, at: index)
+            return RestoreResult(restored: [url])
+        }
+        toast("Removed “\(url.lastPathComponent)” from the sidebar", undoable: true)
+    }
+
+    private func restoreFavorite(_ url: URL, at index: Int) {
+        guard !favorites.contains(url) else { return }
+        favorites.insert(url, at: min(index, favorites.count))
         store.set("favorites", favorites.map { (u: URL) -> String in u.path })
     }
 

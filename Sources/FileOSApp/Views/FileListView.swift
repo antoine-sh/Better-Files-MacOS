@@ -80,7 +80,7 @@ struct FileListView: View {
     }
 
     @ViewBuilder private var emptyNote: some View {
-        if pane.visibleEntries.isEmpty {
+        if pane.visibleEntries.isEmpty && !pane.loading {
             Text(Self.emptyText(filter: pane.filter)).foregroundStyle(.secondary)
         }
     }

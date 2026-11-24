@@ -109,6 +109,10 @@ private struct FileMenuCommands: Commands {
     let model: AppModel
     private var targets: [URL] { model.targets }
 
+    private func ejectDrive() {
+        if let volume = model.ejectTarget { model.eject(volume) }
+    }
+
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
             MenuItem(title: "New Folder", id: "newFolder", model: model, action: { model.newFolder() })
@@ -155,6 +159,7 @@ private struct FileMenuCommands: Commands {
         MenuItem(title: "Show in Finder", id: "showInFinder", model: model, action: { model.showInFinder(model.targets) })
         MenuItem(title: "Copy Path", id: "copyPath", model: model, action: { model.copyPath(model.targets) })
         MenuItem(title: "Add to Sidebar", id: "addToSidebar", model: model, action: { model.addToSidebar(model.targets) })
+        MenuItem(title: "Eject", id: "eject", model: model, disabled: model.ejectTarget == nil, action: { ejectDrive() })
         MenuItem(title: "AirDrop…", id: "airDrop", model: model, disabled: !model.canAirDrop(targets), action: { model.airDrop(model.targets) })
         MenuItem(title: "Open in Terminal", id: "openInTerminal", model: model, action: { model.openIn(kind: .terminal) })
         MenuItem(title: "Open in Editor", id: "openInEditor", model: model, action: { model.openIn(kind: .editor) })

@@ -31,8 +31,9 @@ struct FetchedMeta: Sendable {
     /// Fills only what is still the placeholder (the site as title) or empty, never what the user typed.
     func apply(to b: inout Bookmark) {
         if b.title == b.site, let title { b.title = title }
-        if b.image == nil { b.image = image }
-        if b.icon == nil { b.icon = icon }
+        // Never store a picture or icon address the app mustn't load (the local network, file:, data:).
+        if b.image == nil, LinkMeta.allowed(image.flatMap { (s: String) -> URL? in URL(string: s) }) { b.image = image }
+        if b.icon == nil, LinkMeta.allowed(icon.flatMap { (s: String) -> URL? in URL(string: s) }) { b.icon = icon }
     }
 }
 
@@ -41,10 +42,13 @@ struct FetchedMeta: Sendable {
 enum LinkMeta {
     static let maxBytes = 1_000_000
 
-    static func allowed(_ url: URL?) -> Bool {
-        guard let url, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = url.host else { return false }
-        return Bookmarks.isPublicHost(host)
+    static func allowed(_ url: URL?) -> Bool { Bookmarks.isFetchable(url) }
+
+    /// A saved picture or icon address, only if it may be loaded (saved state can be edited or old).
+    // shortcut: AsyncImage follows redirects unchecked; load through `fetch`'s guarded session if that matters
+    static func imageURL(_ text: String?) -> URL? {
+        guard let text, let url = URL(string: text), allowed(url) else { return nil }
+        return url
     }
 
     /// Stops any redirect that leaves http(s) or heads into the local network.

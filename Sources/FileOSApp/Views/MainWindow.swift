@@ -17,6 +17,7 @@ struct MainWindow: View {
         .overlay { PeekOverlay() }
         .overlay { QuickActionsOverlay() }
         .modifier(FileDialogs(model: model, queue: model.transfers))
+        .modifier(TrashAndNameDialogs(model: model))
         .modifier(SmartDialogs(model: model))
         .modifier(LibraryDialogs(model: model))
         .modifier(DevDialogs(model: model, agents: model.agents))
@@ -267,6 +268,27 @@ struct FileDialogs: ViewModifier {
     private var extensionTitle: String { model.extensionPrompt.map { (p: ExtensionPrompt) -> String in AppModel.extensionTitle(p) } ?? "" }
     private var keepTitle: String { "Keep \(model.extensionPrompt?.from ?? "")" }
     private var useTitle: String { "Use \(model.extensionPrompt?.to ?? "")" }
+}
+
+/// "Use “.”" for a rename that hides the item, and the Trash that needs Full Disk Access.
+struct TrashAndNameDialogs: ViewModifier {
+    @Bindable var model: AppModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Are you sure you want to use a name that begins with a dot “.”?", isPresented: $model.showDotAlert) {
+                Button("Use “.”", action: { model.confirmDotName() })
+                Button("Cancel", role: .cancel, action: { model.dotPrompt = nil })
+            } message: {
+                Text("These names are reserved for the system. If you continue, the item will be hidden.")
+            }
+            .alert("FileOS needs Full Disk Access to empty the Trash", isPresented: $model.showTrashAccessAlert) {
+                Button("Open System Settings", action: { AppModel.openPrivacySettings("Privacy_AllFiles") })
+                Button("Cancel", role: .cancel, action: {})
+            } message: {
+                Text("Turn on FileOS in System Settings > Privacy & Security > Full Disk Access.")
+            }
+    }
 }
 
 /// Tidy (F9.4) and Choose Symbol… (F13.2).

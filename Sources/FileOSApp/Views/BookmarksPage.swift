@@ -237,7 +237,7 @@ private struct SiteIcon: View {
     let link: Bookmark
 
     var body: some View {
-        if let icon = link.icon, let url = URL(string: icon) {
+        if let url = LinkMeta.imageURL(link.icon) {
             AsyncImage(url: url) { (image: Image) in image.resizable() } placeholder: { Image(systemName: "globe") }
                 .frame(width: 16, height: 16)
         } else {
@@ -280,7 +280,7 @@ private struct LinkCard: View {
     }
 
     @ViewBuilder private var picture: some View {
-        if let image = link.image, let url = URL(string: image) {
+        if let url = LinkMeta.imageURL(link.image) {
             AsyncImage(url: url) { (img: Image) in img.resizable().scaledToFill() } placeholder: { Color.secondary.opacity(0.15) }
                 .frame(height: imageHeight)
                 .frame(maxWidth: .infinity)

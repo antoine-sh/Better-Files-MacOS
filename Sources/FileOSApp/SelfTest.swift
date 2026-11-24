@@ -36,6 +36,9 @@ enum SelfTest {
         let pane: PaneModel = model.pane
 
         pane.navigate(to: docs)
+        check("a folder lists off the main actor", pane.loading)
+        await pane.loaded()
+        check("the listing lands", !pane.loading)
         let names: [String] = pane.entries.map { (e: Entry) -> String in e.name }
         check("lists Documents/a.txt", names == ["a.txt"])
         check("Documents has no error", pane.error == nil)
@@ -45,6 +48,7 @@ enum SelfTest {
 
         let missing: URL = home.appendingPathComponent("Nope")
         pane.navigate(to: missing)
+        await pane.loaded()
         check("missing folder sets notFound", pane.error == FileOSError.notFound(missing.path))
         check("missing folder has no entries", pane.entries.isEmpty)
         let missingState: FolderState = FolderState(error: pane.error)
@@ -95,6 +99,7 @@ enum SelfTest {
         pane.navigate(to: docs)
         check("filter clears on navigation", pane.filter.isEmpty)
         pane.filter = "A.T"
+        await pane.loaded()
         let filtered: [String] = pane.visibleEntries.map { (e: Entry) -> String in e.name }
         check("filter matches case-insensitively", filtered == ["a.txt"])
         pane.filter = ""
@@ -111,6 +116,7 @@ enum SelfTest {
         model.toggleHidden()
         try? "h".write(to: docs.appendingPathComponent(".hidden"), atomically: true, encoding: .utf8)
         pane.reload()
+        await pane.loaded()
         check("show hidden lists dotfiles", pane.entries.contains { (e: Entry) -> Bool in e.name == ".hidden" })
         model.toggleHidden()
         let stateFile: URL = home.appendingPathComponent("Library/Application Support/FileOS/state.json")
@@ -122,10 +128,12 @@ enum SelfTest {
             try? fm.createDirectory(at: locked, withIntermediateDirectories: true)
             try? fm.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
             pane.navigate(to: locked)
+            await pane.loaded()
             let lockedState: FolderState = FolderState(error: pane.error)
             check("unreadable folder shows the locked screen", lockedState == .locked(folder: "Locked"))
             try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path)
             pane.reload()
+            await pane.loaded()
             check("Try Again after access is granted lists it", pane.error == nil)
         }
 
@@ -142,7 +150,7 @@ enum SelfTest {
         check("browser builds the list table", browserViews.contains { (v: NSView) -> Bool in v is NSTableView })
 
         for (name, passed) in await fileChecks(model) { check(name, passed) }
-        for (name, passed) in viewChecks(model) { check(name, passed) }
+        for (name, passed) in await viewChecks(model) { check(name, passed) }
         for (name, passed) in await paneChecks(model) { check(name, passed) }
         for (name, passed) in await queueChecks(model) { check(name, passed) }
         for (name, passed) in await searchChecks(model) { check(name, passed) }
@@ -161,6 +169,12 @@ enum SelfTest {
     }
 
     private static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    /// Lines appended from concurrent tasks (the undo-order check).
+    @MainActor final class SelfTestLog {
+        private(set) var lines: [String] = []
+        func add(_ line: String) { lines.append(line) }
+    }
 
     private static func hasToast(_ model: AppModel, _ text: String) -> Bool {
         model.toasts.contains { (t: Toast) -> Bool in t.text == text && t.undoable }
@@ -202,6 +216,7 @@ enum SelfTest {
         model.resolveExtension(keep: true)
         r.append(("Keep .pdf keeps the extension", exists(docs.appendingPathComponent("summary.pdf"))))
 
+        await model.settled()
         pane.selection = [aTxt.path]
         model.trash(model.targets)
         r.append(("trash moves the item", !exists(aTxt)))
@@ -209,6 +224,7 @@ enum SelfTest {
         await model.undoLast()
         r.append(("undo restores the trashed item", exists(aTxt)))
 
+        await model.settled()
         pane.selection = [aTxt.path]
         model.copy(model.targets)
         pane.navigate(to: home)
@@ -282,13 +298,72 @@ enum SelfTest {
         await model.undoLast()
         r.append(("undo reverts the batch rename", exists(docs.appendingPathComponent("x1.txt"))))
 
+        // A dot name is allowed after "Use “.”" (it hides the item).
+        let envFile: URL = docs.appendingPathComponent("env")
+        try? "x".write(to: envFile, atomically: true, encoding: .utf8)
+        pane.renaming = envFile.path
+        model.commitRename(envFile, to: ".env")
+        r.append(("a dot name asks first", model.showDotAlert && exists(envFile)))
+        model.showDotAlert = false
+        model.confirmDotName()
+        r.append(("Use “.” renames", exists(docs.appendingPathComponent(".env")) && !exists(envFile)))
+
+        r.append(("only the newest undoable toast offers Undo",
+                  model.undoToastID == model.toasts.last { (t: Toast) -> Bool in t.undoable }?.id && model.undoToastID != nil))
+
+        // Two undos at once run one after the other, never interleaved.
+        let order = SelfTestLog()
+        for name in ["first", "second"] {
+            model.undo.push(name) {
+                await order.add("start \(name)")
+                try? await Task.sleep(for: .milliseconds(30))
+                await order.add("end \(name)")
+                return RestoreResult()
+            }
+        }
+        let u1 = Task { await model.undoLast() }
+        let u2 = Task { await model.undoLast() }
+        await u1.value
+        await u2.value
+        r.append(("concurrent undos don't interleave", order.lines == ["start second", "end second", "start first", "end first"]))
+
+        // F2.2: Remove from Sidebar is undoable and keeps the folder.
+        model.addToSidebar([spare])
+        let favourite: URL = FileOps.canonical(spare)
+        model.removeFromSidebar(favourite)
+        r.append(("Remove from Sidebar removes only the shortcut", !model.favorites.contains(favourite) && exists(spare)))
+        await model.undoLast()
+        r.append(("Remove from Sidebar is undoable", model.favorites.contains(favourite)))
+        model.removeFavorites([favourite])
+
+        // F2.6: what counts as on a drive.
+        let drive: URL = URL(fileURLWithPath: "/Volumes/Backup")
+        r.append(("a path on a drive is on it", AppModel.isOn(URL(fileURLWithPath: "/Volumes/Backup/a.txt"), volume: drive)
+                    && !AppModel.isOn(URL(fileURLWithPath: "/Volumes/Backup 2/a.txt"), volume: drive)))
+        r.append(("an idle drive isn't busy", !model.isBusy(drive)))
+        r.append(("⌘E is Eject", model.shortcuts["eject"]?.menuShortcut == KeyboardShortcut("e", modifiers: [.command])))
+
+        // F5.10: an empty, readable Trash says so (read off the main actor).
+        try? FileManager.default.removeItem(at: model.trashURL)
+        try? FileManager.default.createDirectory(at: model.trashURL, withIntermediateDirectories: true)
+        model.askEmptyTrash()
+        var said = false
+        for _ in 0..<100 where !said {
+            try? await Task.sleep(for: .milliseconds(20))
+            said = model.toasts.contains { (t: Toast) -> Bool in t.text == "The Trash is empty" }
+        }
+        r.append(("an empty Trash says so", said && !model.showTrashAccessAlert))
+        r.append(("an unreadable Trash isn't shown as empty", AppModel.trashLine(nil) == "In the Trash: unknown (needs Full Disk Access)"))
+        r.append(("link pictures on the local network aren't loaded", LinkMeta.imageURL("http://192.168.1.2/a.png") == nil
+                    && LinkMeta.imageURL("https://example.com/a.png") != nil))
+
         let expected: String = "12 items (1.9 GB) will be deleted for good. This can't be undone."
         r.append(("Empty Trash copy", AppModel.emptyTrashMessage(count: 12, bytes: 1_900_000_000) == expected))
         return r
     }
 
     /// F3: view modes, sort and group persisted per folder, shortcuts in menus.
-    static func viewChecks(_ model: AppModel) -> [(String, Bool)] {
+    static func viewChecks(_ model: AppModel) async -> [(String, Bool)] {
         var r: [(String, Bool)] = []
         let docs: URL = model.home.appendingPathComponent("Documents")
         let pane: PaneModel = model.pane
@@ -317,6 +392,7 @@ enum SelfTest {
         model.setGroup(.kind)
         model.setSort(.size)
         model.toggleFilesFirst()
+        await model.settled()
         r.append(("files first puts files before folders", pane.visibleEntries.first?.isDirectory == false))
         r.append(("grouping by kind makes sections", pane.sections.map { (s: RowSection) -> String in s.title } == ["Folders", "PDFs", "Documents"]))
         r.append(("grouped list still builds a table", tableCount(model) == listTables))
@@ -368,6 +444,7 @@ enum SelfTest {
         r.append(("⇧Tab is left alone", !shiftHandled && model.pane === right))
         right.navigate(to: other)
         model.activate(left)
+        await model.settled()
         left.selection = [aTxt.path]
         await model.transferToOtherPane(.copy)
         let copied: URL = other.appendingPathComponent("a.txt")
@@ -507,6 +584,7 @@ enum SelfTest {
         model.setView(.list)
         model.pane.navigate(to: docs)
         model.pane.reload()
+        await model.settled()
         model.pane.selection = [aTxt.path, words.path]
         check("Space opens Peek", press(model, 49, " ") && peek.isShown)
         check("Peek steps through just the selection", peek.urls.count == 2 && peek.position == "1 of 2"
@@ -522,6 +600,7 @@ enum SelfTest {
             row.label == "Words" && row.value == "3" } && rows.contains { (row: (label: String, value: String)) -> Bool in
             row.label == "Lines" && row.value == "2" })
         check("Esc closes Peek", press(model, 53, "\u{1B}") && !peek.isShown)
+        await model.settled()
         model.pane.selection = [aTxt.path]
         model.peekSelection()
         let siblings: Int = model.pane.shownIDs.count
@@ -643,6 +722,7 @@ enum SelfTest {
         check("undoing Tidy restores and removes its folder", exists(downloads.appendingPathComponent("a.pdf"))
                     && !exists(downloads.appendingPathComponent("PDFs")))
 
+        await model.settled()
         model.setGroup(.date)
         let dateTitles: [String] = model.pane.sections.map { (s: RowSection) -> String in s.title }
         check("Downloads groups by Smart Downloads dates", dateTitles.first == "Today")
@@ -1142,6 +1222,7 @@ enum SelfTest {
         try? "x".write(to: victim, atomically: true, encoding: .utf8)
         model.page = .browser
         model.pane.navigate(to: docs)
+        await model.settled()
         model.pane.selection = [victim.path]
         check("⌫ alone does nothing by default", !press(model, 51, "\u{7F}") && fm.fileExists(atPath: victim.path))
         model.settings.backspaceTrashes = true
