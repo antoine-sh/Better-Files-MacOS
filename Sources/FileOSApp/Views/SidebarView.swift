@@ -103,7 +103,8 @@ struct SidebarView: View {
         all.append(SidebarEntry(title: "Trash", symbol: "trash", item: .folder(model.trashURL)))
         for name in FinderTags.colors { all.append(SidebarEntry(title: name, symbol: "tag", item: .page(.tag(name)))) }
         all.append(SidebarEntry(title: "All Tags…", symbol: "tag", item: .page(.tag(nil))))
-        return all.filter { (e: SidebarEntry) -> Bool in e.title.localizedCaseInsensitiveContains(text) }
+        var seen: Set<SidebarItem> = []  // a favourite can also be home or a drive; ForEach needs unique ids
+        return all.filter { (e: SidebarEntry) -> Bool in e.title.localizedCaseInsensitiveContains(text) && seen.insert(e.item).inserted }
     }
 
     private var favorites: some View {
