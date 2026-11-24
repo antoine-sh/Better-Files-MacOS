@@ -149,7 +149,8 @@ final class BookmarksTests: XCTestCase {
             XCTAssertTrue(Bookmarks.isPublicHost(host), host)
         }
         for host in ["localhost", "a.localhost", "printer.local", "127.0.0.1", "10.1.2.3", "172.16.0.9", "192.168.1.1",
-                     "169.254.169.254", "0.0.0.0", "100.64.0.1", "[::1]", "::1", "[fe80::1]", "fd00::2", "", "2130706433"] {
+                     "169.254.169.254", "0.0.0.0", "100.64.0.1", "[::1]", "::1", "[fe80::1]", "fd00::2", "", "2130706433",
+                     "0:0:0:0:0:0:0:1", "[0::1]", "::127.0.0.1", "::ffff:10.0.0.1", "fe80::1%en0", "64:ff9b::a00:1"] {
             XCTAssertFalse(Bookmarks.isPublicHost(host), host)
         }
     }

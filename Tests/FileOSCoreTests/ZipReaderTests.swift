@@ -3,7 +3,7 @@ import XCTest
 
 final class ZipReaderTests: XCTestCase {
     /// A stored (uncompressed) zip built by hand: local headers, central directory, end record.
-    static func makeZip(_ files: [(String, String)], unixModes: [String: Int] = [:]) -> Data {
+    static func makeZip(_ files: [(String, String)], unixModes: [String: Int] = [:], host: Int = 3) -> Data {
         var out = Data(), central = Data()
         func u16(_ v: Int) -> [UInt8] { [UInt8(v & 0xFF), UInt8(v >> 8 & 0xFF)] }
         func u32(_ v: Int) -> [UInt8] { u16(v & 0xFFFF) + u16(v >> 16) }
@@ -19,7 +19,7 @@ final class ZipReaderTests: XCTestCase {
             let n = Array(name.utf8), b = Array(body.utf8), offset = out.count, crc = crc32(b)
             out += u32(0x04034b50) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc) + u32(b.count) + u32(b.count)
                 + u16(n.count) + u16(0) + n + b
-            central += u32(0x02014b50) + u16(0x0314) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc)
+            central += u32(0x02014b50) + u16(host << 8 | 0x14) + u16(20) + u16(0x0800) + u16(0) + u16(0) + u16(0) + u32(crc)
                 + u32(b.count) + u32(b.count) + u16(n.count) + u16(0) + u16(0) + u16(0) + u16(0)
                 + u32((unixModes[name] ?? (name.hasSuffix("/") ? 0o040755 : 0o100644)) << 16) + u32(offset) + n
         }
@@ -119,6 +119,7 @@ final class ZipReaderTests: XCTestCase {
             (Self.makeZip([("a/../../evil", "x")]), .unsafePath("a/../../evil")),
             (Self.makeZip([("..", "")]), .unsafePath("..")),
             (Self.makeZip([("link", "/etc/passwd")], unixModes: ["link": 0o120777]), .link("link")),
+            (Self.makeZip([("link", "/etc/passwd")], unixModes: ["link": 0o120777], host: 19), .link("link")), // OS X host
         ]
         for (i, (data, expected)) in cases.enumerated() {
             let url = dir.appendingPathComponent("h\(i).zip")

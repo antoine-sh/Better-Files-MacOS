@@ -189,4 +189,33 @@ final class SmartCleanTests: XCTestCase {
         touch(home, ".Trash") // a Trash we can't list (root ignores permissions, so a file stands in)
         XCTAssertNil(SmartClean.diskSummary(home: home).trash)
     }
+
+    func testLeftoversSkipSystemDataAndFoldersChangedDeepInside() {
+        let home = makeTempDir()
+        let old = Date().addingTimeInterval(-200 * 86_400)
+        let support = home.appendingPathComponent("Library/Application Support")
+        touch(home, "Library/Application Support/GoneApp/data.db", modified: old)
+        touch(home, "Library/Application Support/AddressBook/Sources/db.sqlite", modified: old)
+        touch(home, "Library/Application Support/BusyApp/cache/today.db") // changed now, deep inside
+        for dir in ["GoneApp", "AddressBook", "AddressBook/Sources", "BusyApp/cache", "BusyApp"] {
+            try! FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: support.appendingPathComponent(dir).path)
+        }
+        XCTAssertEqual(scan(home)[.appLeftovers]!.items.map(\.url.lastPathComponent), ["GoneApp"])
+    }
+
+    func testDuplicateSpareNotSafeOnceKeptCopyGoesAndHardLinksAreNotDuplicates() throws {
+        let home = makeTempDir()
+        let kept = touch(home, "Documents/a.pdf", blob, modified: Date().addingTimeInterval(-10 * 86_400))
+        touch(home, "Downloads/a.pdf", blob)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("Desktop"), withIntermediateDirectories: true)
+        try FileManager.default.linkItem(at: kept, to: home.appendingPathComponent("Desktop/link.pdf"))
+        let items = scan(home)[.duplicates]!.items
+        XCTAssertEqual(items.map(\.url.lastPathComponent), ["a.pdf"])
+        XCTAssertTrue(items[0].stillSafeToTrash)
+        let keep = try XCTUnwrap(items[0].keep) // a.pdf or its hard link: one file either way
+        try "changed".write(to: keep, atomically: true, encoding: .utf8)
+        XCTAssertFalse(items[0].stillSafeToTrash)
+        try FileManager.default.removeItem(at: keep)
+        XCTAssertFalse(items[0].stillSafeToTrash)
+    }
 }

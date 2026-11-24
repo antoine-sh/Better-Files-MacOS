@@ -83,4 +83,3 @@ and privacy (TCC) prompts.
 - **F15.4 Spotlight / Shortcuts / Siri:** needs App Intents in an app bundle.
 - **F10.1 disk breakdown:** deferred. Sizing the whole disk is expensive, and the breakdown is display-only.
 - **Share extension:** needs an app extension target, which this Swift package doesn't have. Services covers saving links from other apps.
-- **Home stickers:** not built.

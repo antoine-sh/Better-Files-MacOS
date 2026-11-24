@@ -65,6 +65,21 @@ final class TransferTests: XCTestCase {
         XCTAssertEqual(try FileOps.trashSummary(trash).count, 1) // the copy is in the trash now
     }
 
+    func testReplacingAnItemFromTheSameBatchUndoesCleanly() async throws {
+        for mode in [TransferMode.copy, .move] {
+            let into = dst.appendingPathComponent("\(mode)")
+            try FileManager.default.createDirectory(at: into, withIntermediateDirectories: true)
+            let a = touch(src, "\(mode)/a/x.txt", "A"), b = touch(src, "\(mode)/b/x.txt", "B")
+            let r = try await transfer([a, b], to: into, mode: mode, trashDir: trash, resolve: always(.replace))
+            XCTAssertEqual(read(into, "x.txt"), "B")
+            XCTAssertEqual(r.results.count, mode == .copy ? 1 : 2)
+            let u = await r.undo()
+            XCTAssertTrue(u.failed.isEmpty, "\(mode) \(u.failed)")
+            XCTAssertFalse(has(into, "x.txt"), "\(mode)")
+            if mode == .move { XCTAssertEqual(read(src, "move/a/x.txt"), "A"); XCTAssertEqual(read(src, "move/b/x.txt"), "B") }
+        }
+    }
+
     func testApplyToAllAsksOnce() async throws {
         let srcs = (1...3).map { touch(src, "f\($0).txt", "new\($0)") }
         for i in 1...3 { touch(dst, "f\(i).txt", "old") }

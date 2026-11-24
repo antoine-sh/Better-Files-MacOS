@@ -96,7 +96,8 @@ public enum ZipReader {
             guard next <= cd.count else { throw ZipError.damaged }
             let raw = cd[(p + 46)..<(p + 46 + n)]
             let name = String(bytes: raw, encoding: .utf8) ?? String(bytes: raw, encoding: .isoLatin1) ?? ""
-            let mode = u32(cd, p + 38) >> 16
+            // DOS-family hosts (MS-DOS, NTFS, VFAT) put other bits there; every other host (Unix, OS X …) may mean a link.
+            let mode = [0, 11, 14].contains(cd[p + 5]) ? 0 : u32(cd, p + 38) >> 16
             out.append(ZipEntry(name: name, encrypted: flags & 1 != 0, isLink: mode & 0o170000 == 0o120000))
             p = next
         }

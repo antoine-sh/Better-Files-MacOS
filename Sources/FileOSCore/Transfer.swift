@@ -136,6 +136,13 @@ public func transfer(
             stopped = true; failure = notRestored.isEmpty ? error : TransferFailure(underlying: error, notRestored: notRestored)
             break
         }
+        // Replaced an item this batch put there (two sources with one name): it isn't someone else's to put
+        // back. A moved one's undo now fetches it from the Trash; a copy of ours just stays there.
+        if let trashed = trashedForThis.first, let i = made.firstIndex(where: { $0.to.path == to.path }) {
+            replaced.removeLast()
+            if mode == .move { made[i] = Move(from: made[i].from, to: trashed.to) }
+            else { made.remove(at: i); results.remove(at: i) }
+        }
         made.append(Move(from: from, to: to))
         results.append((from, to, action))
         itemsDone += 1; bytesDone += sizes[i]; report(name)
