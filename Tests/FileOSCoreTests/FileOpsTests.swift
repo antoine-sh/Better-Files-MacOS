@@ -78,10 +78,40 @@ final class FileOpsTests: XCTestCase {
     func testRenameClashAndInvalid() throws {
         let a = touch(dir, "a.txt"); touch(dir, "b.txt")
         XCTAssertThrowsError(try FileOps.rename(a, to: "b.txt")) { XCTAssertEqual($0 as? FileOSError, .alreadyExists("b.txt")) }
-        for bad in ["", ".", "..", "x/y", "x\\y"] {
+        for bad in ["", ".", "..", "x/y"] {
             XCTAssertThrowsError(try FileOps.rename(a, to: bad)) { XCTAssertEqual($0 as? FileOSError, .invalidName(bad)) }
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: a.path))
+        XCTAssertEqual(try FileOps.rename(a, to: "a.txt"), a) // same name: nothing to do
+    }
+
+    func testRenameAllowsBackslash() throws { // legal on macOS, and Rename.validate allows it in batch renames
+        let r = try FileOps.rename(touch(dir, "a.txt"), to: "x\\y.txt")
+        XCTAssertTrue(exists(r))
+    }
+
+    func testCrossVolumeMoveKeepsWhatAppearedAtTheDestination() {
+        let a = touch(dir, "a.txt", "A")
+        let to = dir.appendingPathComponent("b.txt")
+        XCTAssertThrowsError(try FileOps.copyThenRemove(a, to: to) { _, to in
+            try "theirs".write(to: to, atomically: false, encoding: .utf8) // another process got there first
+            try FileManager.default.copyItem(at: a, to: to)
+        }) { XCTAssertEqual($0 as? FileOSError, .alreadyExists("b.txt")) }
+        XCTAssertEqual(try? String(contentsOf: to, encoding: .utf8), "theirs")
+        XCTAssertTrue(exists(a))
+    }
+
+    func testCrossVolumeMoveRemovesItsCopyWhenAnItemInsideClashes() {
+        let a = touch(dir, "a.txt", "A")
+        let to = dir.appendingPathComponent("folder")
+        XCTAssertThrowsError(try FileOps.copyThenRemove(a, to: to) { from, to in
+            // e.g. "a.txt" and "A.txt" copied onto a case-insensitive volume: the clash is inside our own copy
+            try FileManager.default.createDirectory(at: to, withIntermediateDirectories: false)
+            touch(to, "x")
+            try FileManager.default.copyItem(at: from, to: to.appendingPathComponent("x"))
+        }) { XCTAssertNotEqual($0 as? FileOSError, .alreadyExists("folder")) }
+        XCTAssertFalse(exists(to))
+        XCTAssertTrue(exists(a))
     }
 
     func testRenameMissingIsNotFound() {
