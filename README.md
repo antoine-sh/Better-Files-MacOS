@@ -22,6 +22,8 @@ scripts/bundle.sh              # builds a release FileOS.app in the repo root
 
 Set `FILEOS_HOME=/some/folder` to run against a different home folder.
 
+The **DMG** workflow (`.github/workflows/dmg.yml`) builds `FileOS.dmg` on pushes to `main`, on `v*` tags (attached to the GitHub release) and on demand. It is signed ad hoc, not notarized, so macOS asks before the first open (right-click > Open).
+
 ## Test
 
 ```sh
