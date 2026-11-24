@@ -242,9 +242,10 @@ public enum SmartClean {
         #endif
     }
 
-    public static func diskSummary(home: URL) -> (free: Int64, total: Int64, used: Int64, trash: Int64) {
+    /// `trash` is nil when the Trash can't be listed (no Full Disk Access), never a misleading zero.
+    public static func diskSummary(home: URL) -> (free: Int64, total: Int64, used: Int64, trash: Int64?) {
         let disk = FileOps.diskInfo(for: home)
-        let trash = FileOps.directorySize(home.appendingPathComponent(".Trash")).bytes
+        let trash = (try? FileOps.trashSummary(home.appendingPathComponent(".Trash")))?.bytes
         return (disk.free, disk.total, max(0, disk.total - disk.free), trash)
     }
 

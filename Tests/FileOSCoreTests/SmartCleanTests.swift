@@ -183,4 +183,10 @@ final class SmartCleanTests: XCTestCase {
         XCTAssertEqual(s.trash, 2048)
         XCTAssertEqual(s.used, s.total - s.free)
     }
+
+    func testDiskSummaryTrashIsUnknownWhenItCantBeListed() {
+        let home = makeTempDir()
+        touch(home, ".Trash") // a Trash we can't list (root ignores permissions, so a file stands in)
+        XCTAssertNil(SmartClean.diskSummary(home: home).trash)
+    }
 }

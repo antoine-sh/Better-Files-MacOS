@@ -228,10 +228,12 @@ public enum FileOps {
 
     public static func emptyTrash(_ trashDir: URL) throws -> (count: Int, bytes: Int64) {
         var count = 0, bytes: Int64 = 0
-        for name in try FileManager.default.contentsOfDirectory(atPath: trashDir.path) {
+        let names: [String]
+        do { names = try FileManager.default.contentsOfDirectory(atPath: trashDir.path) } catch { throw mapped(error, trashDir) }
+        for name in names {
             let url = trashDir.appendingPathComponent(name)
             guard let size = itemSize(url) else { continue } // vanished
-            try FileManager.default.removeItem(at: url)
+            do { try FileManager.default.removeItem(at: url) } catch { throw mapped(error, url) }
             count += 1; bytes += size
         }
         return (count, bytes)

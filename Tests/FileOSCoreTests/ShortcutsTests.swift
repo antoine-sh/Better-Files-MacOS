@@ -39,7 +39,7 @@ final class ShortcutsTests: XCTestCase {
             "viewList": "⌘1", "viewIcons": "⌘2", "viewColumns": "⌘3", "groupKind": "⌃⌘K", "sortName": "⌃⌥⌘1",
             "previewPane": "⇧⌘P", "toggleHidden": "⇧⌘.", "newFolder": "⇧⌘N", "moveHere": "⌥⌘V",
             "copyPath": "⌥⌘C", "makeAlias": "⌃⌘A", "trash": "⌘⌫", "goDownloads": "⌥⌘L", "copyToOtherPane": "F5",
-            "dropShelf": "⌥Space", "tidy": "⌥⌘T", "smartClean": "⌥⌘K", "insights": "⌥⌘I", "workspace9": "⌃9", "layout6": "⌥⌘6", "pinnedWorkspace6": "⌃⌥6",
+            "dropShelf": "⌥Space", "tidy": "⌥⌘T", "smartClean": "⌥⌘K", "insights": "⌥⌘I", "workspace9": "⌃9", "layout6": "⌥⌘6", "pinnedWorkspace6": "⌃⌥6", "eject": "⌘E",
         ]
         for (action, text) in expected { XCTAssertEqual(Shortcuts.defaults[action]?.description, text, action) }
     }
