@@ -76,6 +76,14 @@ final class AppModel {
     private(set) var showInsights: Bool
     /// Free Up Space (F10).
     let clean: CleanModel
+    /// F14.3 Installed and F14.4 AI Agents.
+    let installed = InstalledModel()
+    let agents = AgentsModel()
+    /// Every shell-out (git, brew, lsof …) goes through this; the self-test swaps in canned answers.
+    @ObservationIgnored var runner: any CommandRunner = ProcessRunner()
+    /// F14.2 Choose Defaults…
+    var showOpenInDefaults = false
+    @ObservationIgnored private var installedOpenIn: [ExternalApp]?
     /// F13: chosen symbols and colours by canonical folder path, and the automatic symbols worked out so far
     /// (keyed by path and modification date, so a changed folder is looked at again).
     var symbolOverrides: [String: String]
@@ -700,10 +708,13 @@ extension AppModel {
         service.perform(withItems: urls)
     }
 
-    /// ⌥⇧⌘T / ⌥⇧⌘E / F4: the first installed terminal or editor, on the selection or the folder.
+    /// ⌥⇧⌘T / ⌥⇧⌘E / F4: the default terminal or editor, on the selection or the folder.
     func openIn(kind: ExternalApp.Kind) {
-        let target: URL = OpenIn.target(kind: kind, selection: targets, cwd: pane.currentFolder)
-        if let app = OpenIn.apps.first(where: { (a: ExternalApp) -> Bool in a.kind == kind && Self.applicationURL(named: a.bundleName) != nil }) {
+        openIn(kind: kind, at: OpenIn.target(kind: kind, selection: targets, cwd: pane.currentFolder))
+    }
+
+    func openIn(kind: ExternalApp.Kind, at target: URL) {
+        if let app = defaultApp(kind) {
             openIn(appID: app.id, target: target)
         } else if kind == .editor, let textEdit = Self.applicationURL(named: "TextEdit") {
             NSWorkspace.shared.open([target], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration(),
@@ -711,6 +722,27 @@ extension AppModel {
         } else {
             toast("No \(kind == .terminal ? "terminal" : "editor") app is installed", undoable: false)
         }
+    }
+
+    /// The Open In apps found on this Mac, looked up once.
+    var openInApps: [ExternalApp] {
+        if let installedOpenIn { return installedOpenIn }
+        let found: [ExternalApp] = OpenIn.apps.filter { (a: ExternalApp) -> Bool in Self.applicationURL(named: a.bundleName) != nil }
+        installedOpenIn = found
+        return found
+    }
+
+    static func defaultsKey(_ kind: ExternalApp.Kind) -> String { kind == .terminal ? "openIn.terminal" : "openIn.editor" }
+
+    /// The chosen default if it is still installed, else the first installed app of that kind.
+    func defaultApp(_ kind: ExternalApp.Kind) -> ExternalApp? {
+        let apps: [ExternalApp] = openInApps.filter { (a: ExternalApp) -> Bool in a.kind == kind }
+        let chosen: String = store.get(Self.defaultsKey(kind), default: "")
+        return apps.first { (a: ExternalApp) -> Bool in a.id == chosen } ?? apps.first
+    }
+
+    func setDefaultApp(_ kind: ExternalApp.Kind, id: String) {
+        store.set(Self.defaultsKey(kind), id)
     }
 
     /// Go menu places (F18).

@@ -20,6 +20,7 @@ struct FileContextMenu: View {
         Group {
             Button("Open", action: { act { model.openSelection(ids) } })
             OpenWithMenu(urls: urls)
+            OpenInMenu(urls: urls)
             Divider()
             Button(urls.count == 1 ? "Rename…" : "Rename \(urls.count) Items…", action: { act { model.beginRename(urls) } })
             Button("Duplicate", action: { act { model.duplicate(urls) } })

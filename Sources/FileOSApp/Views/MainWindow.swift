@@ -18,6 +18,7 @@ struct MainWindow: View {
         .modifier(FileDialogs(model: model, queue: model.transfers))
         .modifier(SmartDialogs(model: model))
         .modifier(LibraryDialogs(model: model))
+        .modifier(DevDialogs(model: model, agents: model.agents))
         .onChange(of: model.page) { (old: Page, new: Page) in model.pageChanged(from: old, to: new) }
     }
 
@@ -34,6 +35,12 @@ struct MainWindow: View {
             FreeUpSpaceView(clean: model.clean)
         } else if model.page == .bookmarks {
             BookmarksPage()
+        } else if model.page == .installed {
+            InstalledView(installed: model.installed)
+        } else if model.page == .agents {
+            AgentsView(agents: model.agents)
+        } else if model.page == .aboutMac {
+            AboutMacView(hideNames: model.hideNames)
         } else if case .workspace(let id) = model.page {
             WorkspacePage(id: id).id(id) // fresh tab, view and search per workspace
         } else {
@@ -86,6 +93,7 @@ private struct ViewToolbar: ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             IconButton(symbol: "magnifyingglass", label: "Search", help: "Search everything (⌘K)", disabled: false,
                        action: { model.openSearch() })
+            OpenInMenu(urls: nil)
             DualPaneMenu(model: model)
             ViewModePicker(pane: pane, model: model)
             SortMenu(pane: pane, model: model)

@@ -9,6 +9,7 @@ struct PathBarView: View {
     @State private var text = ""
     @State private var suggestions: [String] = []
     @State private var choice = 0
+    @State private var git: GitResult = .notRepo
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -20,6 +21,16 @@ struct PathBarView: View {
         .onChange(of: isEditing, initial: true) { (_: Bool, editing: Bool) in
             if editing { beginEditing() }
         }
+        .task(id: gitKey) { await loadGit() }
+    }
+
+    /// Looks again when the folder changes or its listing does (a file saved, added or removed).
+    private var gitKey: String { "\(pane.url.path)|\(pane.entries.count)|\(pane.entries.map { (e: Entry) -> Date in e.modified }.max()?.timeIntervalSince1970 ?? 0)" }
+
+    private func loadGit() async {
+        let url: URL = pane.url
+        let result: GitResult = await model.gitStatus(url)
+        if pane.url == url { git = result }
     }
 
     /// ⌘L and errors belong to the active pane only.
@@ -27,7 +38,14 @@ struct PathBarView: View {
     private var isEditing: Bool { model.editingPath && isActive }
 
     @ViewBuilder private var bar: some View {
-        if isEditing { editor } else { crumbs }
+        if isEditing {
+            editor
+        } else {
+            HStack(spacing: 6) {
+                crumbs
+                GitChip(result: git, folder: pane.url, refresh: { Task { await loadGit() } })
+            }
+        }
     }
 
     @ViewBuilder private var errorArea: some View {

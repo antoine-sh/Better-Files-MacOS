@@ -17,6 +17,7 @@ enum SelfTest {
         let model = AppModel(home: home, trashDir: home.appendingPathComponent(".Trash"))
         model.cleanApplications = [home.appendingPathComponent("Applications")] // not the runner's real apps
         model.fetchesLinkMeta = false // CI must not depend on the network
+        model.runner = SelfTestRunner() // canned git/brew/lsof answers: nothing real is run
         return model
     }
 
@@ -150,6 +151,7 @@ enum SelfTest {
         await markdownChecks(model, check)
         await smartChecks(model, check)
         await libraryChecks(model, check)
+        await devChecks(model, check)
 
         try? fm.removeItem(at: home)
         print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
@@ -818,6 +820,121 @@ enum SelfTest {
         model.page = .browser
     }
 
+    /// F14: git chip, Open In defaults, Installed, AI Agents, About This Mac.
+    static func devChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        func read(_ url: URL) -> String { (try? String(contentsOf: url, encoding: .utf8)) ?? "" }
+        func said(_ text: String) -> Bool { model.toasts.contains { (t: Toast) -> Bool in t.text == text } }
+
+        let repo: URL = FileOps.canonical(home.appendingPathComponent("Repo"))
+        try? fm.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let git: GitResult = await model.gitStatus(repo)
+        if case .status(let s) = git {
+            check("git chip shows the branch and count", AppModel.gitChipText(s) == "main · 2" && AppModel.gitCounts(s) == "1 changed, 1 new, 0 deleted")
+            model.copyBranchName(s)
+            check("Copy Branch Name", Pasteboard.string() == "main")
+        } else {
+            check("git chip shows the branch and count", false)
+        }
+        let plain: GitResult = await model.gitStatus(home.appendingPathComponent("Documents"))
+        check("no git chip outside a repo", plain == .notRepo)
+
+        model.setDefaultApp(.terminal, id: "no-such-terminal")
+        check("an uninstalled default falls back", model.defaultApp(.terminal)?.id != "no-such-terminal"
+                && model.store.get(AppModel.defaultsKey(.terminal), default: "") == "no-such-terminal")
+
+        let installed: InstalledModel = model.installed
+        await installed.load(runner: model.runner, home: home)
+        check("Installed lists Homebrew", installed.summary == "6 packages from 1 tool")
+        installed.filter = .apps
+        check("Installed Apps filter", installed.shown(now: Date()).map { (p: Package) -> String in p.name } == ["firefox"])
+        installed.filter = .leftBehind
+        check("Installed Left behind filter", installed.shown(now: Date()).map { (p: Package) -> String in p.name } == ["oldlib"])
+        check("Two of the same finds node and node@24", installed.twins.count == 1)
+        installed.filter = .all
+        if let node = installed.all.first(where: { (p: Package) -> Bool in p.name == "node" }) {
+            model.copyRemoveCommand(node)
+        }
+        check("Copy Remove Command copies, runs nothing", Pasteboard.string() == "brew uninstall node")
+        let brewfile: URL = home.appendingPathComponent("Brewfile")
+        model.saveBrewfile(to: brewfile)
+        check("Save List writes a Brewfile", read(brewfile) == "brew \"node\"\nbrew \"node@24\"\ncask \"firefox\"\n")
+        await model.undoLast()
+        check("undoing Save List removes it", !exists(brewfile))
+        model.page = .installed
+        check("the Installed page builds", await hostAndWait(model) { () -> Bool in installed.loaded && !installed.loading })
+
+        await agentChecks(model, check)
+
+        let about: String = SystemInfo.asText(await model.aboutThisMac(hideNames: true))
+        check("Hide Names removes the user name", about.contains("you@this-mac") && !about.contains(NSUserName()))
+        let named: String = SystemInfo.asText(await model.aboutThisMac(hideNames: false))
+        check("About This Mac lists memory and disk", named.contains("Memory") && named.contains("Disk"))
+        model.copyAboutText(await model.aboutThisMac(hideNames: true))
+        check("Copy as Text", Pasteboard.string()?.hasPrefix("About This Mac") == true && said("Copied About This Mac"))
+        model.page = .browser
+    }
+
+    static func agentChecks(_ model: AppModel, _ check: (String, Bool) -> Void) async {
+        let fm = FileManager.default
+        let home: URL = model.home
+        func read(_ url: URL) -> String { (try? String(contentsOf: url, encoding: .utf8)) ?? "" }
+        func said(_ text: String) -> Bool { model.toasts.contains { (t: Toast) -> Bool in t.text == text } }
+        let project: URL = FileOps.canonical(home.appendingPathComponent("Proj"))
+        let other: URL = FileOps.canonical(home.appendingPathComponent("Other"))
+        try? fm.createDirectory(at: other, withIntermediateDirectories: true)
+        try? fm.createDirectory(at: project, withIntermediateDirectories: true)
+        try? "# Rules".write(to: project.appendingPathComponent("CLAUDE.md"), atomically: true, encoding: .utf8)
+        try? "mine".write(to: project.appendingPathComponent("CLAUDE.local.md"), atomically: true, encoding: .utf8)
+        try? #"{"mcpServers":{"github":{"command":"npx","args":["gh"]}}}"#.write(to: project.appendingPathComponent(".mcp.json"), atomically: true, encoding: .utf8)
+        try? "theirs".write(to: other.appendingPathComponent("CLAUDE.md"), atomically: true, encoding: .utf8)
+        let logs: URL = home.appendingPathComponent(".claude/projects/p")
+        try? fm.createDirectory(at: logs, withIntermediateDirectories: true)
+        let stamp: String = ISO8601DateFormatter().string(from: Date())
+        try? #"{"timestamp":"\#(stamp)","message":{"id":"m","usage":{"input_tokens":40,"output_tokens":2}}}"#
+            .write(to: logs.appendingPathComponent("s.jsonl"), atomically: true, encoding: .utf8)
+
+        model.page = .browser
+        model.pane.navigate(to: project)
+        let agents: AgentsModel = model.agents
+        await model.loadAgents()
+        await agents.select(project, home: home)
+        check("AI Agents lists the current folder", agents.projects.contains(project) && agents.selected == project)
+        check("AI Agents finds Claude's setup", agents.setup.map { (a: AgentFiles) -> Agent in a.agent } == [.claude])
+        check("AI Agents lists the MCP server", agents.mcp.map { (m: MCPServer) -> String in m.name } == ["github"])
+        check("AI Agents lists localhost ports", agents.ports.map { (p: ListeningPort) -> Int in p.port } == [3000, 8000])
+        check("Claude Code usage counts today", agents.usage?.today == 42)
+
+        agents.open("CLAUDE.md")
+        let claudeMD: URL = project.appendingPathComponent("CLAUDE.md")
+        agents.editor?.text = "# New"
+        model.saveSetupFile()
+        check("Save writes the setup file", read(claudeMD) == "# New" && agents.editor?.isEdited == false && said("Saved “CLAUDE.md”"))
+        await model.undoLast()
+        check("undoing Save restores it", read(claudeMD) == "# Rules" && agents.editor?.text == "# Rules")
+
+        model.planCopySetup(.claude, from: project, to: other)
+        let paths: [String] = agents.copying?.plan.map { (i: SetupPlanItem) -> String in i.path } ?? []
+        check("Copy Setup never plans personal files", agents.showCopy && paths == [".mcp.json", "CLAUDE.md"])
+        agents.showCopy = false
+        model.copySetup(replace: false)
+        check("Copy Setup keeps theirs without Replace Them", read(other.appendingPathComponent("CLAUDE.md")) == "theirs"
+                && exists(other.appendingPathComponent(".mcp.json")) && !exists(other.appendingPathComponent("CLAUDE.local.md")))
+        await model.undoLast()
+        check("undoing Copy Setup removes what it copied", !exists(other.appendingPathComponent(".mcp.json")))
+
+        if let launchd = agents.ports.first(where: { (p: ListeningPort) -> Bool in p.pid == 1 }) { model.askStop(launchd) }
+        check("Stop refuses pid 1", !agents.showStop && said("FileOS won't stop that process"))
+        if let fake = agents.ports.first(where: { (p: ListeningPort) -> Bool in p.pid != 1 }) { model.askStop(fake) }
+        check("Stop asks first", agents.showStop && agents.stopping?.port.port == 3000)
+        agents.showStop = false
+        await model.stopConfirmed() // pid 999999 can't exist on macOS (max 99998): nothing is signalled
+        check("Stop reports a failure", said("Couldn't stop “devserver”"))
+        model.page = .agents
+        check("the AI Agents page builds", await hostAndWait(model) { () -> Bool in agents.loaded })
+    }
+
     /// Hosts MainWindow like `hostedViews`, but keeps it up (up to 5 s) until `done` holds, so `.onAppear`
     /// and `.task` work runs.
     private static func hostAndWait(_ model: AppModel, _ done: () -> Bool) async -> Bool {
@@ -862,5 +979,38 @@ enum SelfTest {
         }
         window.contentView = nil
         return all
+    }
+}
+
+/// Canned answers for the self-test, so it runs no real git, brew, lsof or system tools.
+struct SelfTestRunner: CommandRunner {
+    static let brew = """
+    {"formulae":[
+      {"name":"node","installed":[{"version":"24.1.0","installed_on_request":true}],"dependencies":["icu4c","zlib"]},
+      {"name":"node@24","installed":[{"version":"24.0.0","installed_on_request":true}],"dependencies":[]},
+      {"name":"icu4c","installed":[{"version":"76.1","installed_on_request":false}],"dependencies":[]},
+      {"name":"oldlib","installed":[{"version":"1.0","installed_on_request":false}],"dependencies":[]},
+      {"name":"zlib","installed":[{"version":"1.3","installed_on_request":false}],"dependencies":[]}
+    ],"casks":[{"token":"firefox","installed":"133.0"}]}
+    """
+    static let lsof = """
+    COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+    devserver 999999 me    23u  IPv4 0x1      0t0  TCP 127.0.0.1:3000 (LISTEN)
+    launchd       1 root   4u  IPv4 0x2      0t0  TCP *:8000 (LISTEN)
+    """
+
+    func run(_ exe: String, _ args: [String], timeout: TimeInterval) async throws -> (status: Int32, stdout: String) {
+        switch (exe as NSString).lastPathComponent {
+        case "xcode-select": return (0, "/Library/Developer/CommandLineTools\n")
+        case "git": return args.contains("status") ? (0, "## main...origin/main\n M a.txt\n?? b.txt\n") : (128, "")
+        case "brew": return (0, Self.brew)
+        case "lsof": return (0, Self.lsof)
+        case "sw_vers": return (0, "ProductName:\tmacOS\nProductVersion:\t15.1\nBuildVersion:\t24B83\n")
+        case "pmset": return (0, "Now drawing from 'AC Power'\n")
+        case "fdesetup": return (0, "FileVault is On.\n")
+        case "csrutil": return (0, "System Integrity Protection status: enabled.\n")
+        case "spctl": return (0, "assessments enabled\n")
+        default: throw CommandError.notFound(exe)
+        }
     }
 }
