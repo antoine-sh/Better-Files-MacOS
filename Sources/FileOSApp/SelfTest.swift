@@ -863,6 +863,7 @@ enum SelfTest {
         ServiceProvider(model: model).saveLink(servicePB, userData: nil, error: &serviceError)
         check("Services > Save Link to FileOS saves the link", serviceError == nil
                 && model.bookmarkState.bookmarks.contains { (b: Bookmark) -> Bool in b.url == "https://example.com/from-services" })
+        await model.undoLast() // later checks count bookmarks
         servicePB.clearContents()
         servicePB.setString("not a link at all", forType: .string)
         ServiceProvider(model: model).saveLink(servicePB, userData: nil, error: &serviceError)
