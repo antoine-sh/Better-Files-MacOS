@@ -15,3 +15,13 @@ func touch(_ dir: URL, _ rel: String, _ content: String = "x", modified: Date? =
     if let modified { try! FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path) }
     return url
 }
+
+@testable import FileOSCore
+
+/// Answers each command from a closure; records nothing and runs nothing.
+struct ScriptedRunner: CommandRunner {
+    let answer: @Sendable (String, [String]) throws -> (status: Int32, stdout: String)
+    func run(_ exe: String, _ args: [String], timeout: TimeInterval) async throws -> (status: Int32, stdout: String) {
+        try answer(exe, args)
+    }
+}
