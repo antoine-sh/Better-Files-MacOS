@@ -37,19 +37,28 @@ public enum Git {
     public static func status(_ dir: URL, runner: CommandRunner) async -> GitResult {
         // No .git above: not a repo, and no process is launched for every folder the user opens.
         guard let root = repoRoot(dir) else { return .notRepo }
-        // A repo's own config can name programs that `status` runs (filter drivers, possibly via an
-        // include). Such a repo, say one just unzipped, gets the branch read from HEAD and no counts.
-        if let gitDir = gitDir(root), runsPrograms(gitDir) {
-            var s = GitStatus(branch: headBranch(gitDir) ?? "HEAD", tag: nil)
-            s.countsKnown = false
-            return .status(s)
-        }
         #if os(macOS)
         // /usr/bin/git is a stub that offers to install the developer tools; ask xcode-select first.
         guard let dev = try? await runner.run("xcode-select", ["-p"], timeout: 5), dev.status == 0 else { return .gitMissing }
         #endif
         // core.fsmonitor would run a hook program; submodules would bring their own configs.
         let base = ["--no-optional-locks", "-c", "core.fsmonitor=false", "-C", dir.path]
+        // A repo's own config can name programs that `status` runs (filter drivers, maybe through an include
+        // or config.worktree). Git itself lists its config (reading config runs nothing); unless the repo's
+        // scopes are clean, the chip shows the branch read from HEAD and no counts. Fails closed.
+        let config: (status: Int32, stdout: String)
+        do {
+            config = try await runner.run("git", base + ["config", "--list", "--show-scope", "-z"], timeout: 5)
+        } catch CommandError.notFound {
+            return .gitMissing
+        } catch {
+            config = (-1, "")
+        }
+        guard config.status == 0, repoConfigIsSafe(config.stdout) else {
+            var s = GitStatus(branch: gitDir(root).flatMap(headBranch) ?? "HEAD", tag: nil)
+            s.countsKnown = false
+            return .status(s)
+        }
         let out: (status: Int32, stdout: String)
         do {
             out = try await runner.run("git", base + ["status", "--porcelain=v1", "-b", "-z", "--ignore-submodules=all"], timeout: 10)
@@ -76,15 +85,21 @@ public enum Git {
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
     }
 
-    /// Filter drivers or includes in the repo's local config (an unreadable config counts as unsafe).
-    static func runsPrograms(_ gitDir: URL) -> Bool {
-        let config = gitDir.appendingPathComponent("config")
-        guard FileManager.default.fileExists(atPath: config.path) else { return false }
-        guard let text = try? String(contentsOf: config, encoding: .utf8) else { return true }
-        return text.split(separator: "\n").contains { line in
-            let l = line.trimmingCharacters(in: .whitespaces).lowercased()
-            return l.hasPrefix("[filter") || l.hasPrefix("[include")
+    /// `git config --list --show-scope -z`: "scope\0key\nvalue\0" pairs. Safe when no local or worktree key
+    /// sets a filter or an include; global/system config is the user's own (e.g. git-lfs). Anything
+    /// unparsable counts as unsafe.
+    static func repoConfigIsSafe(_ listing: String) -> Bool {
+        var tokens = listing.split(separator: "\0", omittingEmptySubsequences: false)[...]
+        if tokens.last == "" { tokens = tokens.dropLast() }
+        while let scope = tokens.popFirst() {
+            guard ["system", "global", "local", "worktree", "command"].contains(scope),
+                  let entry = tokens.popFirst(), let key = entry.split(separator: "\n", maxSplits: 1).first,
+                  !key.isEmpty else { return false }
+            let k = key.lowercased()
+            if scope == "local" || scope == "worktree",
+               k.hasPrefix("filter.") || k.hasPrefix("include.") || k.hasPrefix("includeif.") { return false }
         }
+        return true
     }
 
     static func headBranch(_ gitDir: URL) -> String? {

@@ -1018,7 +1018,9 @@ struct SelfTestRunner: CommandRunner {
     func run(_ exe: String, _ args: [String], timeout: TimeInterval) async throws -> (status: Int32, stdout: String) {
         switch (exe as NSString).lastPathComponent {
         case "xcode-select": return (0, "/Library/Developer/CommandLineTools\n")
-        case "git": return args.contains("status") ? (0, "## main...origin/main\n M a.txt\n?? b.txt\n") : (128, "")
+        case "git":
+            if args.contains("config") { return (0, "local\0core.bare\nfalse\0") }
+            return args.contains("status") ? (0, "## main...origin/main\0 M a.txt\0?? b.txt\0") : (128, "")
         case "brew": return (0, Self.brew)
         case "lsof": return (0, Self.lsof)
         case "sw_vers": return (0, "ProductName:\tmacOS\nProductVersion:\t15.1\nBuildVersion:\t24B83\n")
