@@ -73,6 +73,22 @@ final class BookmarksTests: XCTestCase {
         XCTAssertNil(meta.image)
     }
 
+    func testExtractMetaDropsImagesAndIconsOnPrivateHosts() {
+        let html = "<meta property='og:image' content='http://169.254.169.254/latest/meta-data'><link rel='icon' href='http://localhost:8080/x.png'>"
+        let meta = Bookmarks.extractMeta(html: html, base: url("https://site.com/"))
+        XCTAssertNil(meta.image)
+        XCTAssertNil(meta.icon)
+        let local = Bookmarks.extractMeta(html: "<link rel='icon' href='/i.png'>", base: url("http://192.168.1.1/"))
+        XCTAssertNil(local.icon) // relative to a private base is private too
+    }
+
+    func testIsFetchable() {
+        XCTAssertTrue(Bookmarks.isFetchable(url("https://site.com/a.png")))
+        XCTAssertFalse(Bookmarks.isFetchable(url("http://10.0.0.1/a.png")))
+        XCTAssertFalse(Bookmarks.isFetchable(URL(string: "file:///etc/passwd")))
+        XCTAssertFalse(Bookmarks.isFetchable(nil))
+    }
+
     func testDeletingACollectionRemovesItsLinks() {
         var (s, c) = Bookmarks.createCollection(BookmarkState(), name: "Reading", icon: "book")
         (s, _, _) = Bookmarks.add(s, url: url("https://a.com"), collection: c.id)

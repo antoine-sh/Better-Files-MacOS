@@ -1,16 +1,20 @@
 import Foundation
 
 /// A small JSON key-value file for app state. Reads once; every `set` rewrites the file atomically.
-/// A missing or corrupt file, or a value of the wrong type, reads as the default.
+/// A missing or corrupt file, or a value of the wrong type, reads as the default; a corrupt file is renamed
+/// to `<name>.corrupt-<timestamp>.json` before it would be overwritten.
 public final class Store: @unchecked Sendable {
     private let url: URL
     private let lock = NSLock()
     private var values: [String: Any]
+    /// The file exists but couldn't be read: it's moved aside before the first write, never overwritten.
+    private var unreadable: Bool
 
     public init(url: URL) {
         self.url = url
         let object = (try? Data(contentsOf: url)).flatMap { try? JSONSerialization.jsonObject(with: $0) }
         values = object as? [String: Any] ?? [:]
+        unreadable = object as? [String: Any] == nil && FileManager.default.fileExists(atPath: url.path)
     }
 
     public func get<T: Codable>(_ key: String, default fallback: T) -> T {
@@ -64,6 +68,13 @@ public final class Store: @unchecked Sendable {
     private func write() {
         guard let out = try? JSONSerialization.data(withJSONObject: values, options: [.prettyPrinted, .sortedKeys]) else { return }
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if unreadable {
+            let stamp = Int(Date().timeIntervalSince1970)
+            let aside = url.deletingLastPathComponent().appendingPathComponent("\(url.deletingPathExtension().lastPathComponent).corrupt-\(stamp).json")
+            // Not moved aside means not overwritten: keep the user's file and the values in memory only.
+            guard (try? FileOps.move(url, to: aside)) != nil else { return }
+            unreadable = false
+        }
         // shortcut: a failed write keeps the value in memory only; surface it if state loss is ever reported
         try? out.write(to: url, options: .atomic)
     }

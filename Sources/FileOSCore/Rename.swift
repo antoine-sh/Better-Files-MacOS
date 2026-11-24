@@ -16,10 +16,13 @@ public enum Rename {
     public static func validate(_ name: String) -> String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Name can't be empty" }
         if name.contains("/") || name.contains(":") { return "Names can't contain / or :" }
-        if name.hasPrefix(".") { return "Names can't start with a dot" }
+        if name == "." || name == ".." { return "Names can't be “.” or “..”" }
         if name.utf8.count > 255 { return "Name is too long" }
         return nil
     }
+
+    /// A leading dot is allowed (".env") but hides the item, so a single rename asks first, as Finder does.
+    public static func hidesItem(_ name: String) -> Bool { name.hasPrefix(".") }
 
     /// Extensions include the dot; nil when they match case-insensitively.
     public static func extensionChange(from: String, to: String) -> (from: String, to: String)? {
@@ -40,7 +43,8 @@ public enum Rename {
                 nb = "\(name) \(String(repeating: "0", count: max(0, 2 - n.count)))\(n)"
             }
             let to = nb + ext
-            return BatchRow(from: from, to: to, error: to == from ? nil : validate(to))
+            let error = to == from ? nil : validate(to) ?? (hidesItem(to) ? "Names can't start with a dot" : nil)
+            return BatchRow(from: from, to: to, error: error)
         }
         var counts: [String: Int] = [:]
         for r in rows { counts[r.to.lowercased(), default: 0] += 1 }

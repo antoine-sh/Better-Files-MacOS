@@ -27,6 +27,18 @@ public struct TransferResult: Sendable {
     public var undo: @Sendable () async -> RestoreResult
 }
 
+/// A failure, plus any replaced item that couldn't be put back after it.
+public struct TransferFailure: LocalizedError {
+    public let underlying: Error
+    public let notRestored: [(url: URL, reason: String)]
+    public init(underlying: Error, notRestored: [(url: URL, reason: String)]) { self.underlying = underlying; self.notRestored = notRestored }
+
+    public var errorDescription: String? {
+        let lost = notRestored.map { "Couldn’t put back “\($0.url.lastPathComponent)”: \($0.reason)" }
+        return ([underlying.localizedDescription] + lost).joined(separator: ". ")
+    }
+}
+
 /// Path used to compare locations: symlinks in the directory part resolved, case-folded on macOS (case-insensitive APFS).
 private func comparable(_ url: URL) -> String {
     let p = url.standardizedFileURL.resolvingSymlinksInPath().path
@@ -110,11 +122,15 @@ public func transfer(
             }
         } catch {
             // The operation failed after the old item was trashed: put it back so nothing is lost.
+            var notRestored: [(url: URL, reason: String)] = []
             if !trashedForThis.isEmpty {
-                _ = FileOps.restore(trashedForThis)
+                let back = FileOps.restore(trashedForThis)
+                notRestored = back.failed
                 replaced.removeLast(trashedForThis.count)
+                // Still in the trash: keep it in the undo so it can be put back once the slot is free.
+                replaced += trashedForThis.filter { m in back.failed.contains { $0.url == m.from } }
             }
-            stopped = true; failure = error
+            stopped = true; failure = notRestored.isEmpty ? error : TransferFailure(underlying: error, notRestored: notRestored)
             break
         }
         made.append(Move(from: from, to: to))

@@ -207,7 +207,7 @@ public enum Bookmarks {
         return String(limited[..<end.lowerBound])
     }
 
-    /// og:title (else `<title>`), og:image and the `rel=icon` link, resolved against `base`; only http(s) results.
+    /// og:title (else `<title>`), og:image and the `rel=icon` link, resolved against `base`; only fetchable results.
     /// Every pattern is linear: tags can't span a `<`, and are at most 2 KB.
     public static func extractMeta(html fullHTML: String, base: URL) -> (title: String?, image: String?, icon: String?) {
         let html = head(fullHTML)
@@ -233,9 +233,16 @@ public enum Bookmarks {
         return (title?.isEmpty == true ? nil : title, resolve(image, base), resolve(icon, base))
     }
 
+    /// Only http(s) on a public host: what the app may ever load for a link (its page, picture or icon).
+    public static func isFetchable(_ url: URL?) -> Bool {
+        guard let url, let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host else { return false }
+        return isPublicHost(host)
+    }
+
     private static func resolve(_ ref: String?, _ base: URL) -> String? {
         guard let ref, let url = URL(string: decode(ref).trimmingCharacters(in: .whitespaces), relativeTo: base)?.absoluteURL,
-              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+              isFetchable(url) else { return nil }
         return url.absoluteString
     }
 

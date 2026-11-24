@@ -58,11 +58,11 @@ final class TransferTests: XCTestCase {
         let r = try await transfer([s], to: dst, mode: .copy, trashDir: trash, resolve: always(.replace))
         XCTAssertEqual(r.results.first?.action, .replaced)
         XCTAssertEqual(read(dst, "a.txt"), "new")
-        XCTAssertEqual(FileOps.trashSummary(trash).count, 1)
+        XCTAssertEqual(try FileOps.trashSummary(trash).count, 1)
         let u = await r.undo()
         XCTAssertTrue(u.failed.isEmpty)
         XCTAssertEqual(read(dst, "a.txt"), "old")
-        XCTAssertEqual(FileOps.trashSummary(trash).count, 1) // the copy is in the trash now
+        XCTAssertEqual(try FileOps.trashSummary(trash).count, 1) // the copy is in the trash now
     }
 
     func testApplyToAllAsksOnce() async throws {
@@ -194,6 +194,13 @@ final class TransferTests: XCTestCase {
         let r = try await transfer([ghost], to: dst, mode: .copy, trashDir: trash, resolve: always(.replace))
         XCTAssertNotNil(r.failure)
         XCTAssertEqual(read(dst, "a.txt"), "old")
+    }
+
+    func testFailureNamesWhatCouldNotBePutBack() {
+        struct Boom: LocalizedError { var errorDescription: String? { "Disk full" } }
+        let f = TransferFailure(underlying: Boom(), notRestored: [(URL(fileURLWithPath: "/d/a.txt"), "Busy")])
+        XCTAssertEqual(f.errorDescription, "Disk full. Couldn’t put back “a.txt”: Busy")
+        XCTAssertEqual(TransferFailure(underlying: Boom(), notRestored: []).errorDescription, "Disk full")
     }
 
     func testCancelStops() async throws {

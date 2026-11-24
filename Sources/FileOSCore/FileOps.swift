@@ -212,8 +212,18 @@ public enum FileOps {
         if posixRename(from.path, to.path) == 0 { return }
         let code = errno
         guard code == EXDEV else { throw mapped(NSError(domain: NSPOSIXErrorDomain, code: Int(code)), from) }
-        try FileManager.default.copyItem(at: from, to: to)
-        try FileManager.default.removeItem(at: from)
+        try copyThenRemove(from, to: to)
+    }
+
+    /// The cross-volume move. `to` is known not to exist, so whatever is there after a failed copy is ours to remove.
+    // shortcut: if removing the source fails midway, both the full copy and what's left of the source stay
+    static func copyThenRemove(_ from: URL, to: URL,
+                               copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
+        do { try copy(from, to) } catch {
+            try? FileManager.default.removeItem(at: to)
+            throw mapped(error, from)
+        }
+        do { try FileManager.default.removeItem(at: from) } catch { throw mapped(error, from) }
     }
 
     public static func emptyTrash(_ trashDir: URL) throws -> (count: Int, bytes: Int64) {
@@ -227,9 +237,16 @@ public enum FileOps {
         return (count, bytes)
     }
 
-    public static func trashSummary(_ trashDir: URL) -> (count: Int, bytes: Int64) {
+    /// A missing Trash is empty; one that can't be listed (no Full Disk Access) throws, so it's never shown as empty.
+    public static func trashSummary(_ trashDir: URL) throws -> (count: Int, bytes: Int64) {
         var count = 0, bytes: Int64 = 0
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: trashDir.path)) ?? [] {
+        let names: [String]
+        do { names = try FileManager.default.contentsOfDirectory(atPath: trashDir.path) } catch {
+            let e = mapped(error, trashDir)
+            if case FileOSError.notFound = e { return (0, 0) }
+            throw e
+        }
+        for name in names {
             guard let size = itemSize(trashDir.appendingPathComponent(name)) else { continue }
             count += 1; bytes += size
         }

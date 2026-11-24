@@ -151,15 +151,31 @@ final class FileOpsTests: XCTestCase {
 
     func testTrashSummaryAndEmpty() throws {
         let trash = dir.appendingPathComponent("Trash")
-        XCTAssertEqual(FileOps.trashSummary(trash).count, 0)
+        XCTAssertEqual(try FileOps.trashSummary(trash).count, 0) // missing reads as empty
         touch(trash, "a.txt", "12345"); touch(trash, "d/b.txt", "123")
-        let s = FileOps.trashSummary(trash)
+        let s = try FileOps.trashSummary(trash)
         XCTAssertEqual(s.count, 2)
         XCTAssertEqual(s.bytes, 8)
         let e = try FileOps.emptyTrash(trash)
         XCTAssertEqual(e.count, 2)
         XCTAssertEqual(e.bytes, 8)
-        XCTAssertEqual(FileOps.trashSummary(trash).count, 0)
+        XCTAssertEqual(try FileOps.trashSummary(trash).count, 0)
+    }
+
+    func testTrashSummaryThrowsWhenTheTrashCantBeListed() {
+        let notADir = touch(dir, "Trash") // stands in for a Trash we may not read (root ignores permissions)
+        XCTAssertThrowsError(try FileOps.trashSummary(notADir))
+    }
+
+    func testMoveAcrossVolumesRemovesItsPartialCopyOnFailure() {
+        let a = touch(dir, "a.txt", "A")
+        let to = dir.appendingPathComponent("b.txt")
+        struct Boom: Error {}
+        XCTAssertThrowsError(try FileOps.copyThenRemove(a, to: to) { _, to in
+            try "half".write(to: to, atomically: false, encoding: .utf8); throw Boom()
+        })
+        XCTAssertFalse(exists(to))
+        XCTAssertTrue(exists(a))
     }
 
     func testTrashSummaryCountsDanglingSymlink() throws {
@@ -167,7 +183,7 @@ final class FileOpsTests: XCTestCase {
         touch(trash, "a.txt")
         // A dangling symlink still counts (lstat succeeds); a name that disappears does not.
         try FileManager.default.createSymbolicLink(at: trash.appendingPathComponent("dangling"), withDestinationURL: dir.appendingPathComponent("nowhere"))
-        XCTAssertEqual(FileOps.trashSummary(trash).count, 2)
+        XCTAssertEqual(try FileOps.trashSummary(trash).count, 2)
     }
 
     func testDirectorySizeSymlinkLoop() throws {

@@ -54,4 +54,26 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(list[1]["view"] as? String, "future")
         XCTAssertEqual(Store(url: url).getArray("list", of: Prefs.self), [Prefs(view: "cards", size: 3)])
     }
+
+    func testCorruptFileIsKeptAsideBeforeTheFirstWrite() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("state.json")
+        try "{not json".write(to: url, atomically: true, encoding: .utf8)
+        let s = Store(url: url)
+        s.set("x", 1)
+        s.set("y", 2)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("state.corrupt-") }
+        XCTAssertEqual(aside.count, 1)
+        XCTAssertTrue(aside[0].hasSuffix(".json"))
+        XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent(aside[0]), encoding: .utf8), "{not json")
+        XCTAssertEqual(Store(url: url).get("y", default: 0), 2)
+    }
+
+    func testReadableFileIsNotKeptAside() throws {
+        let dir = makeTempDir()
+        let url = dir.appendingPathComponent("state.json")
+        Store(url: url).set("x", 1)
+        Store(url: url).set("x", 2)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["state.json"])
+    }
 }
