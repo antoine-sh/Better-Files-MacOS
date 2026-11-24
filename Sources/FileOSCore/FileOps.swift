@@ -62,12 +62,14 @@ private func posixRenameNoReplace(_ from: String, _ to: String) -> Int32 {
     return rename(from, to)
 }
 
-/// The copy or create failed because something is already at the destination (so it isn't ours to remove).
-func isFileExists(_ error: Error) -> Bool {
+/// copyItem failed because something was already at `to` itself (so it isn't ours to remove). A clash on an
+/// item inside a folder being copied names that item, not `to`, so the half-made copy is still cleaned up.
+// shortcut: an error without NSDestinationFilePath counts as ours, as before this check existed
+func isFileExists(_ error: Error, at to: URL) -> Bool {
     let ns = error as NSError
-    if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteFileExistsError { return true }
-    if ns.domain == NSPOSIXErrorDomain && ns.code == Int(EEXIST) { return true }
-    return (ns.userInfo[NSUnderlyingErrorKey] as? NSError).map(isFileExists) ?? false
+    guard ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteFileExistsError,
+          let dest = ns.userInfo["NSDestinationFilePath"] as? String else { return false }
+    return URL(fileURLWithPath: dest).standardizedFileURL.path == to.standardizedFileURL.path
 }
 
 func exists(_ url: URL) -> Bool { (try? FileManager.default.attributesOfItem(atPath: url.path)) != nil }
@@ -243,7 +245,7 @@ public enum FileOps {
     static func copyThenRemove(_ from: URL, to: URL,
                                copy: (URL, URL) throws -> Void = { try FileManager.default.copyItem(at: $0, to: $1) }) throws {
         do { try copy(from, to) } catch {
-            if isFileExists(error) { throw FileOSError.alreadyExists(to.lastPathComponent) }
+            if isFileExists(error, at: to) { throw FileOSError.alreadyExists(to.lastPathComponent) }
             try? FileManager.default.removeItem(at: to)
             throw mapped(error, from)
         }

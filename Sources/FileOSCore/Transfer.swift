@@ -119,7 +119,7 @@ public func transfer(
             else {
                 do { try FileManager.default.copyItem(at: from, to: to) }
                 catch { // don't leave a half-written copy, but never remove what someone else put there
-                    if !isFileExists(error) { try? FileManager.default.removeItem(at: to) }
+                    if !isFileExists(error, at: to) { try? FileManager.default.removeItem(at: to) }
                     throw error
                 }
             }

@@ -101,6 +101,19 @@ final class FileOpsTests: XCTestCase {
         XCTAssertTrue(exists(a))
     }
 
+    func testCrossVolumeMoveRemovesItsCopyWhenAnItemInsideClashes() {
+        let a = touch(dir, "a.txt", "A")
+        let to = dir.appendingPathComponent("folder")
+        XCTAssertThrowsError(try FileOps.copyThenRemove(a, to: to) { from, to in
+            // e.g. "a.txt" and "A.txt" copied onto a case-insensitive volume: the clash is inside our own copy
+            try FileManager.default.createDirectory(at: to, withIntermediateDirectories: false)
+            touch(to, "x")
+            try FileManager.default.copyItem(at: from, to: to.appendingPathComponent("x"))
+        }) { XCTAssertNotEqual($0 as? FileOSError, .alreadyExists("folder")) }
+        XCTAssertFalse(exists(to))
+        XCTAssertTrue(exists(a))
+    }
+
     func testRenameMissingIsNotFound() {
         let missing = dir.appendingPathComponent("nope.txt")
         XCTAssertThrowsError(try FileOps.rename(missing, to: "x.txt")) { XCTAssertEqual($0 as? FileOSError, .notFound(missing.path)) }
