@@ -271,7 +271,14 @@ private struct ShelfTile: View {
         AppModel.itemCount(url).map { (n: Int) -> String in AppModel.items(n) } ?? "Can't find it"
     }
 
-    var body: some View {
+    private var fill: Color { targeted ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.04) }
+
+    private var label: String {
+        let base: String = "\(url.lastPathComponent), \(countText)"
+        return number.map { (n: Int) -> String in "\(n), \(base)" } ?? base
+    }
+
+    private var tile: some View {
         VStack(spacing: 3) {
             Image(nsImage: Thumbnails.icon(url))
                 .resizable()
@@ -282,7 +289,11 @@ private struct ShelfTile: View {
             Text(targeted ? "Move here" : countText).font(.caption2).foregroundStyle(targeted ? Color.accentColor : Color.secondary)
         }
         .frame(width: 92, height: 88)
-        .background(RoundedRectangle(cornerRadius: 10).fill(targeted ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(fill))
+    }
+
+    var body: some View {
+        tile
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { model.openInFileOS(url) }
         .dropDestination(for: URL.self, action: { (urls: [URL], _: CGPoint) -> Bool in
@@ -297,8 +308,7 @@ private struct ShelfTile: View {
         }
         .help("Drop to move here; hold ⌥ to copy")
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(number.map { (n: Int) -> String in "\(n), \(url.lastPathComponent), \(countText)" }
-                            ?? "\(url.lastPathComponent), \(countText)")
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder private var badge: some View {

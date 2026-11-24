@@ -181,8 +181,9 @@ final class AppModel {
         shelfPinned = urls("dropShelf.pinned")
         let held: [URL] = store.get("holding", default: [String]()).map { (p: String) -> URL in Self.heldURL(URL(fileURLWithPath: p)) }
         // Held files that were moved or deleted since are forgotten (they were never ours to keep).
-        holding = held.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
-        if holding.count != held.count { store.set("holding", holding.map { (u: URL) -> String in u.path }) }
+        let kept: [URL] = held.filter { (u: URL) -> Bool in FileManager.default.fileExists(atPath: u.path) }
+        holding = kept
+        if kept.count != held.count { store.set("holding", kept.map { (u: URL) -> String in u.path }) }
         quickAccess = urls("quickAccess")
         homeParts = store.get("home.widgets", default: [String: Bool]())
         quickActions = QuickAction.ordered(store.getArray("quickActions", of: String.self))
