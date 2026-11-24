@@ -62,7 +62,7 @@ and privacy (TCC) prompts.
 | F9 Smart Downloads | Done | |
 | F10 Smart Clean | Partial | The disk breakdown in F10.1 (apps, system, snapshots) is deferred. Only free, used, total and the Trash are shown. |
 | F11 Workspaces | Done | |
-| F12 Bookmarks | Partial | No Share extension or Services entry. |
+| F12 Bookmarks | Partial | Services > "Save Link to FileOS" (from FileOS.app built by scripts/bundle.sh). No Share extension. |
 | F13 Folder symbols & colours | Done | |
 | F14 Developer tools | Done | |
 | F15 Drop Shelf & menu bar | Partial | Notch hover is not verified. F15.4 is skipped. |
@@ -80,5 +80,5 @@ and privacy (TCC) prompts.
 - **F7.4 Screenshot OCR:** needs the Vision framework.
 - **F15.4 Spotlight / Shortcuts / Siri:** needs App Intents in an app bundle.
 - **F10.1 disk breakdown:** deferred. Sizing the whole disk is expensive, and the breakdown is display-only.
-- **Share extension / Services:** these need an app extension target, which this package doesn't have.
+- **Share extension:** needs an app extension target, which this Swift package doesn't have. Services covers saving links from other apps.
 - **Home stickers:** not built.

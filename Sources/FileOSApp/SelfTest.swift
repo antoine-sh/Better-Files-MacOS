@@ -856,6 +856,18 @@ enum SelfTest {
         check("saving it again says Already saved", model.toasts.contains { (t: Toast) -> Bool in t.text == "Already saved" }
                 && model.bookmarkState.bookmarks.count == 1)
         check("the Bookmarks page builds", hostedViews(model).contains { (v: NSView) -> Bool in v is NSSplitView })
+        let servicePB = NSPasteboard(name: NSPasteboard.Name("FileOS.selftest.service"))
+        servicePB.clearContents()
+        servicePB.setString("https://example.com/from-services", forType: .string)
+        var serviceError: NSString? = nil
+        ServiceProvider(model: model).saveLink(servicePB, userData: nil, error: &serviceError)
+        check("Services > Save Link to FileOS saves the link", serviceError == nil
+                && model.bookmarkState.bookmarks.contains { (b: Bookmark) -> Bool in b.url == "https://example.com/from-services" })
+        servicePB.clearContents()
+        servicePB.setString("not a link at all", forType: .string)
+        ServiceProvider(model: model).saveLink(servicePB, userData: nil, error: &serviceError)
+        check("Services rejects text that isn't a link", serviceError == "That isn't a link")
+        servicePB.releaseGlobally()
 
         model.search.query = "taxes"
         model.search.chip = .all

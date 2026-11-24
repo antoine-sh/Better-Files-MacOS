@@ -26,6 +26,15 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key><dict><key>default</key><string>Save Link to FileOS</string></dict>
+            <key>NSMessage</key><string>saveLink</string>
+            <key>NSPortName</key><string>FileOS</string>
+            <key>NSSendTypes</key><array><string>public.url</string><string>public.utf8-plain-text</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

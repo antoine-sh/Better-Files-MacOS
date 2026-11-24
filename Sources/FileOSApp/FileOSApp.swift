@@ -8,10 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var model = AppModel(home: AppModel.defaultHome)
     private var shelf: DropShelfController?
     private var hotKey: HotKey?
+    private var services: ServiceProvider?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let model: AppModel = self.model
         model.applyAppearance()
+        services = ServiceProvider(model: model)
+        NSApp.servicesProvider = services
         let shelf = DropShelfController(model: model)
         shelf.watchDrags(model.settings.dropShelfOnDrag)
         self.shelf = shelf
