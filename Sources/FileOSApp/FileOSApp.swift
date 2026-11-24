@@ -57,14 +57,33 @@ struct FileOSApp: App {
         }
         .commands { FileOSCommands(model: delegate.model) }
         Settings {
-            SettingsView().environment(delegate.model).tint(delegate.model.settings.accentColor)
+            SettingsRoot().environment(delegate.model)
         }
-        MenuBarExtra(isInserted: Bindable(delegate.model).settings.menuBar) {
+        MenuBarExtra(isInserted: menuBarInserted) {
             MenuBarPanel().environment(delegate.model)
         } label: {
             MenuBarLabel(model: delegate.model)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// The App body must not read or rewrite observable model state: SwiftUI writes `isInserted` back while it
+    /// updates scenes, and a `Bindable` write reassigns the whole `settings` struct, which Observation reports as
+    /// a change even when the value is equal. That re-ran this body, which rebuilt the scenes, which wrote again:
+    /// an endless update loop that overflowed the stack on launch. Only real changes are written here.
+    private var menuBarInserted: Binding<Bool> {
+        let model = delegate.model
+        return Binding(get: { model.settings.menuBar },
+                       set: { (shown: Bool) in if model.settings.menuBar != shown { model.settings.menuBar = shown } })
+    }
+}
+
+/// Reads the accent inside a view, so an accent change updates Settings only, not every scene.
+private struct SettingsRoot: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        SettingsView().tint(model.settings.accentColor)
     }
 }
 
