@@ -57,15 +57,30 @@ struct FileOSApp: App {
         }
         .commands { FileOSCommands(model: delegate.model) }
         Settings {
-            SettingsView().environment(delegate.model).tint(delegate.model.settings.accentColor)
+            SettingsView().modifier(AccentTint(model: delegate.model)).environment(delegate.model)
         }
-        MenuBarExtra(isInserted: Bindable(delegate.model).settings.menuBar) {
+        MenuBarExtra(isInserted: menuBarShown) {
             MenuBarPanel().environment(delegate.model)
         } label: {
             MenuBarLabel(model: delegate.model)
         }
         .menuBarExtraStyle(.window)
     }
+
+    /// Writes only a real change. SwiftUI sets `isInserted` back while it builds the scenes, and any write to
+    /// `settings` (even an equal one) invalidates this body, so an unguarded binding re-ran the scene list
+    /// forever and crashed at launch (stack overflow in `AppGraph.graphDidChange`).
+    private var menuBarShown: Binding<Bool> {
+        let model: AppModel = delegate.model
+        return Binding(get: { model.settings.menuBar },
+                       set: { (shown: Bool) in if model.settings.menuBar != shown { model.settings.menuBar = shown } })
+    }
+}
+
+/// Reads the accent inside a view body, not `App.body`, so a settings change doesn't rebuild every scene.
+private struct AccentTint: ViewModifier {
+    let model: AppModel
+    func body(content: Content) -> some View { content.tint(model.settings.accentColor) }
 }
 
 @main @MainActor
