@@ -45,7 +45,7 @@ and privacy (TCC) prompts.
   injectable `CommandRunner` with an argument array and a timeout.
 - **`FileOSApp`** is a thin SwiftUI + AppKit layer, built on macOS only. It holds the `@MainActor
   @Observable` models (`AppModel`, `PaneModel` and others), the views, and the `--self-test` runner.
-  Disk reads happen off the main actor.
+  Folder listings, searches and scans run off the main actor; a few small reads (volume list, disk line) still run on it.
 
 ## Coverage of FEATURES.md
 
